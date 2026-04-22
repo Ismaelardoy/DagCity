@@ -1,7 +1,9 @@
 import json
 import os
+import io
+import sys
 import threading
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, Any
 
 
@@ -251,46 +253,226 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 <div id="header">DAG_CITY</div>
 <div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V4.1</div>
 
-<!-- ══ AWAITING DATA OVERLAY ══ -->
-<div id="awaiting-overlay" style="
-  display: none; position: fixed; inset: 0; z-index: 999;
-  background: rgba(0,0,0,0.88); backdrop-filter: blur(20px);
+<!-- ══ INITIALIZE METROPOLIS — Awaiting Data Overlay ══ -->
+<div id="awaiting-overlay" style="display:none;">
+
+  <!-- Background grid scan animation -->
+  <canvas id="az-bg" style="position:absolute;inset:0;width:100%;height:100%;opacity:0.18;"></canvas>
+
+  <div class="az-inner">
+    <!-- Logo -->
+    <div class="az-logo">
+      <div class="az-logo-glyph">&#9670;</div>
+      <div class="az-logo-text">DAG_CITY</div>
+    </div>
+
+    <!-- Title -->
+    <div class="az-headline">INITIALIZE METROPOLIS</div>
+    <div class="az-sub">Drop your dbt <span class="az-file-tag">manifest.json</span> and optional <span class="az-file-tag">run_results.json</span> here to build your city.</div>
+
+    <!-- Drop Zone -->
+    <div id="drop-zone"
+      ondragover="dzDragOver(event);"
+      ondragleave="dzDragLeave(event);"
+      ondrop="dzDrop(event);"
+      onclick="document.getElementById('manifest-upload').click();">
+
+      <div id="dz-icon" class="dz-icon-idle">
+        <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+          <path d="M28 6v30M16 20l12-14 12 14" stroke="#00f3ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="8" y="38" width="40" height="12" rx="4" stroke="#00f3ff" stroke-width="2" fill="none"/>
+          <circle cx="15" cy="44" r="2" fill="#00f3ff"/>
+          <circle cx="41" cy="44" r="2" fill="#ff00ff"/>
+        </svg>
+      </div>
+
+      <div id="dz-title" class="dz-title">DRAG &amp; DROP FILES</div>
+      <div id="dz-sub" class="dz-text">manifest.json &nbsp;+&nbsp; run_results.json (optional)<br><span style="font-size:0.75rem;opacity:0.5;">or click to browse</span></div>
+
+      <!-- File slots -->
+      <div id="dz-slots" style="margin-top:20px;display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+        <div id="slot-manifest" class="dz-slot" title="manifest.json">
+          <span class="dz-slot-icon">&#128196;</span>
+          <span id="slot-manifest-name">manifest.json</span>
+          <span id="slot-manifest-check" class="dz-slot-check" style="display:none;">&#10003;</span>
+        </div>
+        <div id="slot-results" class="dz-slot dz-slot-optional" title="run_results.json (optional)">
+          <span class="dz-slot-icon">&#9201;</span>
+          <span id="slot-results-name">run_results.json</span>
+          <span id="slot-results-check" class="dz-slot-check" style="display:none;">&#10003;</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden file input (allows multi-select) -->
+    <input type="file" id="manifest-upload" accept=".json" multiple style="display:none" onchange="dzFileInput(this)">
+
+    <!-- Upload button -->
+    <button id="az-launch-btn" class="az-btn" onclick="dzLaunch()" disabled>&#127961; LAUNCH CITY</button>
+
+    <!-- Status / Loader -->
+    <div id="upload-status" class="az-status"></div>
+
+    <!-- Loader bar -->
+    <div id="az-loader" style="display:none;width:min(440px,80vw);margin-top:18px;">
+      <div class="az-loader-track">
+        <div id="az-loader-bar" class="az-loader-bar"></div>
+      </div>
+      <div id="az-loader-label" class="az-loader-label">PARSING ARCHITECTURE…</div>
+    </div>
+  </div>
+</div>
+
+<style>
+/* ══ Overlay wrapper ══ */
+#awaiting-overlay {
+  position: fixed; inset: 0; z-index: 999;
+  background: rgba(0, 0, 8, 0.92);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   flex-direction: column; align-items: center; justify-content: center;
   font-family: 'Courier New', monospace; text-align: center;
-">
-  <div style="font-size:72px; margin-bottom: 24px; animation: pulse-icon 2s infinite;">📡</div>
-  <div style="font-size: 2.2rem; font-weight: 900; letter-spacing: 8px; color: #00f3ff;
-              text-shadow: 0 0 20px #00f3ff; margin-bottom: 12px;">AWAITING DATA</div>
-  <div style="font-size: 1rem; color: #ffffff66; letter-spacing: 3px; margin-bottom: 40px;">
-    NO MANIFEST FILE FOUND · DROP YOUR DBT PROJECT FOLDER
-  </div>
-  <div id="drop-zone" style="
-    width: min(480px, 88vw); padding: 48px 32px;
-    border: 2px dashed rgba(0,243,255,0.4); border-radius: 20px;
-    background: rgba(0,243,255,0.04); cursor: pointer;
-    transition: all 0.3s; color: #00f3ff;
-  "
-  ondragover="event.preventDefault(); this.style.borderColor='#00f3ff'; this.style.background='rgba(0,243,255,0.1)';"
-  ondragleave="this.style.borderColor='rgba(0,243,255,0.4)'; this.style.background='rgba(0,243,255,0.04)';"
-  ondrop="handleDrop(event);"
-  onclick="document.getElementById('manifest-upload').click();"
-  >
-    <div style="font-size: 3rem; margin-bottom: 16px;">📂</div>
-    <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px;">DROP manifest.json HERE</div>
-    <div style="font-size: 0.85rem; color: #ffffff55;">or click to browse · dbt target/manifest.json</div>
-  </div>
-  <input type="file" id="manifest-upload" accept=".json" style="display:none" onchange="handleFileInput(this)">
-  <div id="upload-status" style="margin-top: 24px; font-size: 0.9rem; color: #39ff14; min-height: 24px;"></div>
-</div>
-<style>
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+#awaiting-overlay.hiding {
+  opacity: 0 !important;
+  transform: scale(1.04);
+  pointer-events: none;
+}
+.az-inner {
+  position: relative; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 32px 16px;
+}
+/* Logo */
+.az-logo { display:flex; align-items:center; gap:16px; margin-bottom:36px; }
+.az-logo-glyph {
+  font-size:40px; color:#ff00ff;
+  text-shadow: 0 0 18px #ff00ff, 0 0 40px #ff00ff44;
+  animation: glyph-spin 8s linear infinite;
+}
+@keyframes glyph-spin {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.15); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+.az-logo-text {
+  font-size: 2.4rem; font-weight:900; letter-spacing:10px;
+  color:#ff00ff; text-shadow: 0 0 20px #ff00ff, 0 0 60px #ff00ff44;
+}
+/* Headline */
+.az-headline {
+  font-size: clamp(1.6rem, 4vw, 2.8rem); font-weight:900;
+  letter-spacing: 8px; color:#00f3ff;
+  text-shadow: 0 0 25px #00f3ff, 0 0 60px #00f3ff33;
+  margin-bottom: 14px; text-transform: uppercase;
+}
+.az-sub {
+  font-size: 0.95rem; color: #ffffff66; letter-spacing: 2px; line-height: 1.7;
+  max-width: 520px; margin-bottom: 40px;
+}
+.az-file-tag {
+  color: #00f3ff; background: rgba(0,243,255,0.1);
+  border: 1px solid rgba(0,243,255,0.3); border-radius: 4px;
+  padding: 1px 8px; font-size: 0.85em;
+}
+/* Drop zone */
+#drop-zone {
+  width: min(520px, 88vw); padding: 40px 28px;
+  border: 2px dashed rgba(0,243,255,0.35); border-radius: 20px;
+  background: rgba(0,243,255,0.03); cursor: pointer;
+  transition: all 0.25s cubic-bezier(.22,1,.36,1);
+  position: relative; overflow: hidden;
+}
+#drop-zone::before {
+  content: ''; position: absolute; inset: 0; border-radius: 18px;
+  background: radial-gradient(ellipse at 50% 0%, rgba(0,243,255,0.07) 0%, transparent 70%);
+  pointer-events: none;
+}
+#drop-zone.dz-hover {
+  border-color: #00f3ff;
+  background: rgba(0,243,255,0.08);
+  box-shadow: 0 0 50px rgba(0,243,255,0.25), inset 0 0 30px rgba(0,243,255,0.05);
+  transform: scale(1.01);
+}
+/* Upload icon */
+.dz-icon-idle svg { filter: drop-shadow(0 0 8px #00f3ff88); animation: float-icon 3s ease-in-out infinite; }
+@keyframes float-icon {
+  0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); }
+}
+.dz-icon-hover svg { animation: none; filter: drop-shadow(0 0 20px #00f3ff) drop-shadow(0 0 40px #00f3ff66); }
+.dz-title { font-size: 1.3rem; font-weight:900; letter-spacing:5px; color:#00f3ff; margin: 16px 0 8px; }
+.dz-text { font-size:0.85rem; color:#ffffff55; line-height:1.8; }
+/* File slots */
+.dz-slot {
+  display:flex; align-items:center; gap:8px;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(0,243,255,0.2);
+  border-radius: 10px; padding: 10px 18px; font-size:0.8rem;
+  color:#ffffff88; transition: all 0.3s; min-width: 170px; justify-content: center;
+}
+.dz-slot.dz-slot-optional { border-color: rgba(255,0,255,0.2); }
+.dz-slot.dz-slot-loaded {
+  border-color: #39ff14; color: #39ff14;
+  background: rgba(57,255,20,0.07);
+  box-shadow: 0 0 14px rgba(57,255,20,0.2);
+}
+.dz-slot-icon { font-size:1.1rem; }
+.dz-slot-check { color:#39ff14; font-size:1rem; font-weight:bold; }
+/* Launch button */
+.az-btn {
+  margin-top: 32px;
+  background: rgba(0,243,255,0.08);
+  border: 1.5px solid rgba(0,243,255,0.4);
+  color: #00f3ff; font-family: 'Courier New', monospace;
+  font-size: 1.1rem; font-weight: 900; letter-spacing: 4px;
+  padding: 16px 48px; border-radius: 12px; cursor: pointer;
+  transition: all 0.25s; text-transform: uppercase;
+  box-shadow: 0 0 20px rgba(0,243,255,0.1);
+}
+.az-btn:hover:not(:disabled) {
+  background: rgba(0,243,255,0.18);
+  box-shadow: 0 0 45px rgba(0,243,255,0.4);
+  transform: translateY(-2px);
+}
+.az-btn:disabled {
+  opacity: 0.3; cursor: not-allowed; border-color: rgba(0,243,255,0.15);
+}
+.az-btn.ready {
+  border-color: #ff00ff; color: #ff00ff;
+  box-shadow: 0 0 25px rgba(255,0,255,0.3);
+  background: rgba(255,0,255,0.08);
+  animation: btn-pulse 1.4s ease-in-out infinite;
+}
+@keyframes btn-pulse {
+  0%,100% { box-shadow: 0 0 20px rgba(255,0,255,0.3); }
+  50%      { box-shadow: 0 0 60px rgba(255,0,255,0.6), 0 0 100px rgba(255,0,255,0.2); }
+}
+.az-btn.ready:hover { background: rgba(255,0,255,0.2); transform: translateY(-2px); }
+/* Status & loader */
+.az-status {
+  margin-top: 18px; font-size: 0.88rem; color: #39ff14;
+  min-height: 22px; letter-spacing: 2px;
+}
+.az-loader-track {
+  width: 100%; height: 4px; background: rgba(0,243,255,0.1);
+  border-radius: 2px; overflow: hidden;
+}
+.az-loader-bar {
+  height: 100%; background: linear-gradient(90deg, #00f3ff, #ff00ff);
+  border-radius: 2px; width: 0%;
+  animation: loader-scan 1.8s ease-in-out infinite;
+}
+@keyframes loader-scan {
+  0%   { width: 0%;   margin-left: 0; }
+  50%  { width: 75%;  margin-left: 0; }
+  100% { width: 0%;   margin-left: 100%; }
+}
+.az-loader-label {
+  margin-top: 10px; font-size: 0.78rem; letter-spacing: 3px;
+  color: #00f3ff88; text-align: center;
+}
 @keyframes pulse-icon {
   0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.1); opacity: 0.7; }
-}
-#drop-zone:hover {
-  border-color: #00f3ff !important;
-  background: rgba(0,243,255,0.1) !important;
-  box-shadow: 0 0 40px rgba(0,243,255,0.2);
+  50% { transform: scale(1.08); opacity: 0.75; }
 }
 </style>
 
@@ -1104,8 +1286,8 @@ document.getElementById('stats').innerHTML =
   `NODES&nbsp;<span style="color:#fff">${RAW.nodes.length}</span><br>EDGES&nbsp;<span style="color:#fff">${RAW.links.length}</span><br>${hasReal?`<span style="color:var(--green)">✓ REAL TIMES</span>`:`<span style="color:var(--orange)">~ SIMULATED</span>`}`;
 
 // ═══════ BUILD ANIMATION ═══════
-const buildStart = performance.now();
-const BUILD_DUR = 500;
+let buildStart = performance.now();  // `let` so rebuildCity() can reset it
+const BUILD_DUR = 800;               // ms — longer for more cinematic city-emerge
 
 // ═══════ RENDER LOOP ═══════
 const clock = new THREE.Clock();
@@ -1374,50 +1556,221 @@ renderer.domElement.addEventListener('wheel', hideHUD);
 helpTrigger.addEventListener('mouseenter', () => { smartHUD.classList.remove('hidden'); });
 helpTrigger.addEventListener('mouseleave', () => { if(userInteracted) smartHUD.classList.add('hidden'); });
 
-// ═══════ DRAG & DROP — Manifest Upload (Awaiting Data Mode) ═══════
-function handleDrop(event) {
-  event.preventDefault();
-  event.currentTarget.style.borderColor = 'rgba(0,243,255,0.4)';
-  event.currentTarget.style.background  = 'rgba(0,243,255,0.04)';
-  const file = event.dataTransfer.files[0];
-  if (file) processManifestFile(file);
+// ═══════ DRAG & DROP — Upload to /api/upload ═══════
+
+const _dzFiles = { manifest: null, run_results: null };
+
+function dzDragOver(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.add('dz-hover');
+  document.getElementById('dz-icon').className = 'dz-icon-hover';
+}
+function dzDragLeave(e) {
+  document.getElementById('drop-zone').classList.remove('dz-hover');
+  document.getElementById('dz-icon').className = 'dz-icon-idle';
+}
+function dzDrop(e) {
+  e.preventDefault();
+  dzDragLeave(e);
+  dzIngestFiles(Array.from(e.dataTransfer.files));
+}
+function dzFileInput(input) {
+  dzIngestFiles(Array.from(input.files));
+  input.value = ''; // Reset so same file can be re-dropped
 }
 
-function handleFileInput(input) {
-  const file = input.files[0];
-  if (file) processManifestFile(file);
-}
-
-function processManifestFile(file) {
+function dzIngestFiles(files) {
   const status = document.getElementById('upload-status');
-  if (!file.name.endsWith('.json')) {
-    status.style.color = '#ff2222';
-    status.textContent = '✗ Please drop a valid .json file (e.g. manifest.json)';
-    return;
-  }
-  status.style.color = '#00f3ff';
-  status.textContent = `⏳ Reading ${file.name}...`;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const parsed = JSON.parse(e.target.result);
-      // Basic GIGO: dbt manifest must have 'nodes' and 'metadata' keys
-      if (!parsed.nodes || !parsed.metadata) {
-        status.style.color = '#ff2222';
-        status.textContent = '✗ Not a valid dbt manifest.json — missing nodes or metadata keys.';
-        return;
-      }
-      status.style.color = '#39ff14';
-      status.textContent = `✓ Manifest loaded! Reloading city (${Object.keys(parsed.nodes).length} nodes)...`;
-      // Store in sessionStorage and reload — server-side parse not yet wired; this is the UX hook
-      sessionStorage.setItem('dagcity_local_manifest', e.target.result);
-      setTimeout(() => location.reload(), 1200);
-    } catch(err) {
-      status.style.color = '#ff2222';
-      status.textContent = `✗ JSON parse error: ${err.message}`;
+  status.textContent = '';
+  for (const file of files) {
+    if (!file.name.endsWith('.json')) {
+      status.style.color = '#ff4444';
+      status.textContent = `✗ Only .json files accepted (got: ${file.name})`;
+      return;
     }
-  };
-  reader.readAsText(file);
+    if (file.name.startsWith('manifest')) {
+      _dzFiles.manifest = file;
+      dzMarkSlot('manifest', file.name);
+    } else if (file.name.startsWith('run_results')) {
+      _dzFiles.run_results = file;
+      dzMarkSlot('results', file.name);
+    } else if (!_dzFiles.manifest) {
+      // Fallback: treat any unknown .json as manifest if we don't have one
+      _dzFiles.manifest = file;
+      dzMarkSlot('manifest', file.name);
+    } else {
+      _dzFiles.run_results = file;
+      dzMarkSlot('results', file.name);
+    }
+  }
+  const btn = document.getElementById('az-launch-btn');
+  if (_dzFiles.manifest) {
+    btn.disabled = false;
+    btn.classList.add('ready');
+    status.style.color = '#00f3ff';
+    status.textContent = _dzFiles.run_results
+      ? '✓ manifest.json + run_results.json ready. Click LAUNCH CITY.'
+      : '✓ manifest.json ready. Click LAUNCH CITY.'
+  }
+}
+
+function dzMarkSlot(slotId, filename) {
+  const slot  = document.getElementById('slot-' + slotId);
+  const name  = document.getElementById('slot-' + slotId + '-name');
+  const check = document.getElementById('slot-' + slotId + '-check');
+  if (slot)  slot.classList.add('dz-slot-loaded');
+  if (name)  name.textContent = filename;
+  if (check) check.style.display = 'inline';
+}
+
+async function dzLaunch() {
+  if (!_dzFiles.manifest) return;
+  const status  = document.getElementById('upload-status');
+  const loader  = document.getElementById('az-loader');
+  const btn     = document.getElementById('az-launch-btn');
+  const lblEl   = document.getElementById('az-loader-label');
+
+  // Show loader
+  btn.disabled = true;
+  btn.classList.remove('ready');
+  loader.style.display = 'block';
+  status.textContent = '';
+
+  const loaderMessages = [
+    'READING MANIFEST…',
+    'MAPPING DAG GRAPH…',
+    'CLASSIFYING LAYERS…',
+    'DETECTING BOTTLENECKS…',
+    'ACTIVATING GHOST PROTOCOL…',
+    'BUILDING ARCHITECTURE…',
+  ];
+  let msgIdx = 0;
+  const msgTimer = setInterval(() => { lblEl.textContent = loaderMessages[Math.min(msgIdx++, loaderMessages.length-1)]; }, 400);
+
+  try {
+    // 1. Read files into strings
+    const manifestText = await _dzReadFile(_dzFiles.manifest);
+    let manifestObj;
+    try { manifestObj = JSON.parse(manifestText); }
+    catch(e) { throw new Error(`manifest.json is not valid JSON: ${e.message}`); }
+
+    let runResultsObj = null;
+    if (_dzFiles.run_results) {
+      const rrText = await _dzReadFile(_dzFiles.run_results);
+      try { runResultsObj = JSON.parse(rrText); } catch(_) {}  // Non-fatal
+    }
+
+    // 2. POST to backend
+    lblEl.textContent = 'CALLING PARSER ENGINE…';
+    const resp = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manifest: manifestObj, run_results: runResultsObj }),
+    });
+
+    const json = await resp.json();
+    if (!resp.ok) throw new Error(json.error || `Server error ${resp.status}`);
+
+    clearInterval(msgTimer);
+    lblEl.textContent = `CITY READY — ${json.nodes.length} BUILDINGS DETECTED`;
+
+    // 3. Hide overlay with cinematic transition, then build city
+    await _dzHideOverlay();
+    rebuildCity(json);
+
+  } catch(err) {
+    clearInterval(msgTimer);
+    loader.style.display = 'none';
+    btn.disabled = false;
+    btn.classList.add('ready');
+    status.style.color = '#ff4444';
+    status.textContent = `✗ ${err.message}`;
+    console.error('[DagCity] Upload error:', err);
+  }
+}
+
+function _dzReadFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = (e) => resolve(e.target.result);
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    reader.readAsText(file);
+  });
+}
+
+function _dzHideOverlay() {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('awaiting-overlay');
+    overlay.classList.add('hiding');
+    setTimeout(() => {
+      overlay.style.display = 'none';
+      overlay.classList.remove('hiding');
+      resolve();
+    }, 650);
+  });
+}
+
+// ═══════ rebuildCity — Hot city reconstruction after upload ═══════
+function rebuildCity(graphData) {
+  // 1. Clear existing scene objects
+  [...meshes].forEach(m => {
+    scene.remove(m);
+    if (m.geometry) m.geometry.dispose();
+    if (Array.isArray(m.material)) m.material.forEach(mt => mt.dispose());
+    else if (m.material) m.material.dispose();
+  });
+  meshes.length = 0;
+  Object.keys(nodeMeshMap).forEach(k => delete nodeMeshMap[k]);
+
+  edgeObjs.forEach(e => {
+    scene.remove(e.line);
+    if (e.line.geometry) e.line.geometry.dispose();
+    e.particles.forEach(p => { scene.remove(p); if(p.geometry) p.geometry.dispose(); });
+  });
+  edgeObjs.length = 0;
+  Object.keys(nodeMap).forEach(k => delete nodeMap[k]);
+  selectedNode = null;
+  critSet = new Set();
+
+  // 2. Inject new data into globals
+  const nodes = graphData.nodes || [];
+  const links = graphData.links || [];
+  const newMax = nodes.length ? Math.max(...nodes.map(n => n.execution_time || 0)) : 0;
+  const newMin = nodes.length ? Math.min(...nodes.map(n => n.execution_time || 0)) : 0;
+
+  // Recalculate positions
+  const lC = {}, lI = {};
+  nodes.forEach(n => { const l = n.layer||'default'; lC[l]=(lC[l]||0)+1; lI[l]=0; });
+  nodes.forEach((n, i) => {
+    const l = n.layer||'default';
+    n.x = LAYER_X[l] ?? 0;
+    n.z = (lI[l] - (lC[l]-1)/2) * 70;
+    n.y = 0; lI[l]++; n._delay = i * 80;
+    nodeMap[n.id] = n;
+  });
+
+  // 3. Replace global RAW reference (used by other functions)
+  RAW.nodes = nodes;
+  RAW.links = links;
+  RAW.metadata = graphData.metadata || {};
+
+  // 4. Rebuild meshes + edges
+  nodes.forEach(n => buildBuilding(n));
+  links.forEach(l => buildEdge(l));
+
+  // 5. Reset build animation so buildings emerge from the ground
+  buildStart = performance.now();
+
+  // 6. Update stats HUD
+  const hasRealNew = graphData.metadata?.has_real_times || false;
+  document.getElementById('stats').innerHTML =
+    `NODES&nbsp;<span style="color:#fff">${nodes.length}</span><br>EDGES&nbsp;<span style="color:#fff">${links.length}</span><br>${hasRealNew?`<span style="color:var(--green)">✓ REAL TIMES</span>`:`<span style="color:var(--orange)">∼ SIMULATED</span>`}`;
+
+  // 7. Reset camera into cinematic sweep position
+  tweenCamera(INIT_CAM, {x:0, y:0, z:0}, 1800);
+  controls.autoRotate = true;
+  const btnRot = document.getElementById('btn-rotate');
+  if (btnRot) { btnRot.textContent = '🎥 Auto-Rotate: ON'; btnRot.classList.add('active'); }
 }
 
 </script>
@@ -1431,9 +1784,87 @@ function processManifestFile(file) {
         return os.path.abspath(output_path)
 
     def serve(self, directory: str, port: int = 8000):
-        os.chdir(directory)
-        server = ThreadingHTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-        print(f"[+] DagCity V4.1 Performance Profiler → http://0.0.0.0:{port}")
+        """
+        Serve the visualizer from 'directory' on the given port.
+        Provides both static file serving (GET) and the graph API (POST /api/upload).
+        """
+        # Resolve serve_dir for static files before we chdir
+        serve_dir = os.path.abspath(directory)
+
+        # Import ManifestParser here to avoid circular import at module level
+        from core.parser import ManifestParser
+
+        class DagCityHandler(SimpleHTTPRequestHandler):
+            """
+            Extends SimpleHTTPRequestHandler:
+            ─ GET  /* → serves static files from viz_output/
+            ─ POST /api/upload → parses manifest + run_results, returns graph JSON
+            """
+
+            def __init__(self, *args, **kwargs):
+                # directory= keyword tells SimpleHTTPRequestHandler where to serve from
+                super().__init__(*args, directory=serve_dir, **kwargs)
+
+            def log_message(self, fmt, *args):
+                # Only log errors; silence verbose GET noise in production
+                if args and len(args) >= 2 and str(args[1]).startswith(('4', '5')):
+                    super().log_message(fmt, *args)
+
+            def do_POST(self):
+                if self.path != '/api/upload':
+                    self.send_error(404)
+                    return
+
+                content_len = int(self.headers.get('Content-Length', 0))
+                raw_body = self.rfile.read(content_len)
+
+                try:
+                    payload = json.loads(raw_body)
+                except json.JSONDecodeError as e:
+                    self._json_error(400, f"Invalid JSON body: {e}")
+                    return
+
+                manifest_dict   = payload.get('manifest')
+                run_results_dict = payload.get('run_results')  # optional
+
+                if not manifest_dict:
+                    self._json_error(400, "Missing 'manifest' key in request body.")
+                    return
+
+                try:
+                    graph_data = ManifestParser.parse_from_dict(
+                        manifest_dict,
+                        run_results_dict=run_results_dict,
+                    )
+                    print(f"[+] /api/upload → {len(graph_data['nodes'])} nodes parsed OK")
+                    self._json_ok(graph_data)
+                except (ValueError, KeyError) as e:
+                    print(f"[WARNING] /api/upload parser error: {e}", file=sys.stderr)
+                    self._json_error(422, str(e))
+                except Exception as e:
+                    print(f"[ERROR] /api/upload unexpected: {e}", file=sys.stderr)
+                    self._json_error(500, f"Internal error: {e}")
+
+            # ── Helpers ─────────────────────────────────────────────────
+            def _json_ok(self, data: dict):
+                body = json.dumps(data).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _json_error(self, code: int, msg: str):
+                body = json.dumps({'error': msg}).encode('utf-8')
+                self.send_response(code)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = ThreadingHTTPServer(('0.0.0.0', port), DagCityHandler)
+        print(f"[+] DagCity V4.2 → http://0.0.0.0:{port}  |  POST /api/upload ready")
         try:
             server.serve_forever()
         except KeyboardInterrupt:

@@ -41,6 +41,33 @@ class ManifestParser:
         manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
         self.run_results_path = os.path.join(manifest_dir, "run_results.json")
 
+    # ─── Factory: parse from in-memory dicts (upload endpoint) ───────
+    @classmethod
+    def parse_from_dict(
+        cls,
+        manifest_dict: Dict,
+        run_results_dict: Dict = None,
+    ) -> Dict[str, Any]:
+        """
+        Parse a dbt manifest supplied as a Python dict (e.g. from an HTTP upload)
+        without touching the filesystem.  Optionally accepts run_results as a dict.
+        Raises ValueError on GIGO schema violations.
+        """
+        if "nodes" not in manifest_dict or "metadata" not in manifest_dict:
+            raise ValueError("GIGO: manifest is missing 'nodes' or 'metadata' keys.")
+        # Build a throwaway instance just to get access to the private helpers
+        instance = cls.__new__(cls)
+        instance.manifest_path = "<in-memory>"
+        instance.run_results_path = None
+        run_times: Dict[str, float] = {}
+        if run_results_dict:
+            for result in run_results_dict.get("results", []):
+                uid = result.get("unique_id", "")
+                t   = result.get("execution_time", 0.0)
+                if uid:
+                    run_times[uid] = round(float(t), 3)
+        return instance._parse_data(manifest_dict, run_times)
+
     # ─── Private Helpers ────────────────────────────────────────────
     def _classify_layer(self, res_type: str, file_path: str, fqn: List[str], name: str) -> str:
         """Staff Data Architect: Sequential Rules Engine V5.0."""
@@ -123,7 +150,7 @@ class ManifestParser:
 
     # ─── Public API ──────────────────────────────────────────────────
     def parse(self) -> Dict[str, Any]:
-        # GIGO: validate manifest
+        """Parse from the file path supplied to __init__."""
         if not os.path.exists(self.manifest_path):
             raise FileNotFoundError(f"Missing manifest at {self.manifest_path}")
         with open(self.manifest_path, "r", encoding="utf-8") as f:
@@ -133,11 +160,12 @@ class ManifestParser:
                 raise ValueError(f"GIGO Incident: Invalid JSON format. {e}")
         if "nodes" not in data or "metadata" not in data:
             raise ValueError("GIGO Incident: Manifest schema incomplete ('nodes' or 'metadata' missing)")
-
-        # Load performance data
         run_times = self._load_run_results()
-        has_real_times = bool(run_times)
+        return self._parse_data(data, run_times)
 
+    # ─── Core parsing engine (shared by parse() and parse_from_dict()) ─
+    def _parse_data(self, data: Dict, run_times: Dict[str, float]) -> Dict[str, Any]:
+        has_real_times = bool(run_times)
         nodes_data = {**data.get("nodes", {}), **data.get("sources", {})}
         parsed_nodes = {}
         links = []
