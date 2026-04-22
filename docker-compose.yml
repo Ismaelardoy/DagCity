@@ -16,5 +16,5 @@ services:
       # The host path may not exist yet — always mount so the container
       # starts in 'Awaiting Data' mode; HOST_PROJECT_PATH defaults to a
       # local ./data directory so Docker Desktop never blocks the start.
-      - ${HOST_PROJECT_PATH:-./data}:/data:ro
+      - ${HOST_PROJECT_PATH:-./data}:/data
     restart: unless-stopped

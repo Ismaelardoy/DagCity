@@ -1,77 +1,58 @@
 import os
 import sys
+import json
+import shutil
+import asyncio
+from datetime import datetime
+from typing import Dict, Any, Optional
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+
+# Local imports
+from core.config import MANIFEST_PATH, PORT, VIZ_DIR, PROJECTS_DIR, WORKSPACE_PATH
 from core.parser import ManifestParser
 from core.generator import VizGenerator
+from core.watcher import ManifestWatcher
+from core.router_projects import router as projects_router
+from core.streamer import router as streamer_router, watcher_instance
 
-
-def orchestrate():
-    """
-    Main entry point for containerized DagCity.
-    Reads configuration from environment variables.
-
-    Resilience Policy (Senior DevOps):
-    - If manifest.json is NOT found, the server starts in 'Awaiting Data' mode.
-    - The UI is served with an empty graph so the user can interact via Drag & Drop.
-    - sys.exit(1) is NEVER called due to missing data — only for unrecoverable runtime errors.
-    """
-    print("--- DAG CITY: CONTAINERIZED ORCHESTRATION ---")
-
-    manifest_path = os.environ.get("MANIFEST_PATH", "/data/target/manifest.json")
-    port = int(os.environ.get("PORT", 8080))
-
-    # Fixed serve directory inside the container
-    viz_dir = "/app/viz_output"
-    os.makedirs(viz_dir, exist_ok=True)
-    viz_file = os.path.join(viz_dir, "index.html")
-
-    viz = VizGenerator()
-
-    # ── Resilience Gate ──────────────────────────────────────────────────────
-    # Check manifest existence. If missing, pivot to 'Awaiting Data' mode
-    # instead of crashing. The container stays alive to serve the UI.
-    if not manifest_path:
-        print("[INFO] MANIFEST_PATH environment variable not set.", file=sys.stderr)
-        print("[INFO] No local manifest found. Starting in 'Awaiting Data' mode...")
-        graph_data = _build_empty_graph()
-    elif not os.path.exists(manifest_path):
-        print(f"[INFO] Manifest file not found at: {manifest_path}")
-        print("[INFO] No local manifest found. Starting in 'Awaiting Data' mode...")
-        graph_data = _build_empty_graph()
-    elif not os.access(manifest_path, os.R_OK):
-        print(f"[WARNING] Manifest at {manifest_path} exists but is not readable.")
-        print("[INFO] Starting in 'Awaiting Data' mode...")
-        graph_data = _build_empty_graph()
-    else:
-        # ── Happy Path ───────────────────────────────────────────────────────
+def _get_workspace_active_project() -> Optional[str]:
+    if os.path.exists(WORKSPACE_PATH):
         try:
-            print(f"[*] Parsing manifest from {manifest_path}...")
-            parser_engine = ManifestParser(manifest_path)
-            graph_data = parser_engine.parse()
-            print(f"[+] Data lineage mapped: {len(graph_data['nodes'])} entities, "
-                  f"{len(graph_data['links'])} edges found.")
-        except Exception as e:
-            print(f"[WARNING] Parser failed: {e}", file=sys.stderr)
-            print("[INFO] Falling back to 'Awaiting Data' mode...")
-            graph_data = _build_empty_graph()
+            with open(WORKSPACE_PATH) as f:
+                return json.load(f).get("active_project")
+        except: pass
+    return None
 
-    # ── Visualization & Serving Layer ────────────────────────────────────────
+def _set_workspace_active_project(name: str):
     try:
-        print(f"[*] Generating visualization...")
-        viz.generate(graph_data, viz_file)
+        with open(WORKSPACE_PATH, "w") as f:
+            json.dump({"active_project": name}, f)
+    except: pass
 
-        print(f"[*] Starting server on 0.0.0.0:{port}...")
-        viz.serve(viz_dir, port=port)
+app = FastAPI(title="DagCity API", version="5.0")
+
+# Register modular routers
+app.include_router(projects_router)
+app.include_router(streamer_router)
+
+# Globals for orchestration
+viz = VizGenerator()
+watcher: Optional[ManifestWatcher] = None
+
+def _get_current_graph() -> Dict:
+    """Helper to get the most recent graph data from disk."""
+    if not os.path.exists(MANIFEST_PATH):
+        return _build_empty_graph()
+    try:
+        parser = ManifestParser(MANIFEST_PATH)
+        return parser.parse()
     except Exception as e:
-        print(f"\n[CRITICAL ERROR] Server could not start: {str(e)}", file=sys.stderr)
-        sys.exit(1)
-
+        print(f"[ERROR] Failed to parse manifest on the fly: {e}", file=sys.stderr)
+        return _build_empty_graph()
 
 def _build_empty_graph() -> dict:
-    """
-    Returns a minimal valid graph payload with zero nodes and zero edges.
-    The 'status' flag allows the frontend to detect 'Awaiting Data' mode
-    and render the appropriate Drag & Drop upload UI.
-    """
     return {
         "status": "awaiting_upload",
         "metadata": {
@@ -84,8 +65,134 @@ def _build_empty_graph() -> dict:
         "links": [],
     }
 
+def _autodiscover_project_name(manifest_dict: dict) -> str:
+    """Zero-friction project naming."""
+    try:
+        name = manifest_dict.get("metadata", {}).get("project_name")
+        if name and isinstance(name, str) and name.strip():
+            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name.strip())
+            return safe[:64]
+    except Exception: pass
+    return f"Project_{datetime.now().strftime('%Y%m%d_%H%M')}"
+
+# ── Core Routes ──────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+async def read_index():
+    index_path = os.path.join(VIZ_DIR, "index.html")
+    if not os.path.exists(index_path):
+        graph = _get_current_graph()
+        viz.generate(graph, index_path)
+    return FileResponse(index_path)
+
+@app.post("/api/upload")
+async def upload_data(request: Request):
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    manifest_dict = payload.get('manifest')
+    run_results_dict = payload.get('run_results')
+    project_name = payload.get('project_name', '').strip()
+
+    if not manifest_dict:
+        raise HTTPException(status_code=400, detail="Missing 'manifest' key")
+
+    try:
+        graph_data = ManifestParser.parse_from_dict(
+            manifest_dict,
+            run_results_dict=run_results_dict,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    if not project_name:
+        project_name = _autodiscover_project_name(manifest_dict)
+
+    base_name = project_name
+    counter = 1
+    while os.path.exists(os.path.join(PROJECTS_DIR, project_name)):
+        project_name = f"{base_name}_{counter}"
+        counter += 1
+
+    project_dir = os.path.join(PROJECTS_DIR, project_name)
+    os.makedirs(project_dir, exist_ok=True)
+
+    with open(os.path.join(project_dir, "manifest.json"), "w") as f:
+        json.dump(manifest_dict, f)
+    if run_results_dict:
+        with open(os.path.join(project_dir, "run_results.json"), "w") as f:
+            json.dump(run_results_dict, f)
+    with open(os.path.join(project_dir, "graph.json"), "w") as f:
+        json.dump(graph_data, f)
+    
+    meta = {"node_count": len(graph_data.get("nodes", [])), "created_at": datetime.now().isoformat()}
+    with open(os.path.join(project_dir, "meta.json"), "w") as f:
+        json.dump(meta, f)
+
+    print(f"[+] Saved project '{project_name}' to {project_dir}")
+    _set_workspace_active_project(project_name)
+    return {**graph_data, "saved": True, "project": project_name}
+
+# ── Startup & Static Assets ───────────────────────────────────────────
+
+# Sync static assets before mounting
+_STATIC_SRC = os.path.join(os.path.dirname(__file__), 'static')
+_STATIC_DST = os.path.join(VIZ_DIR, 'static')
+if os.path.isdir(_STATIC_SRC):
+    if os.path.exists(_STATIC_DST):
+        shutil.rmtree(_STATIC_DST)
+    shutil.copytree(_STATIC_SRC, _STATIC_DST)
+os.makedirs(_STATIC_DST, exist_ok=True)
+
+# Static mount point
+app.mount("/static", StaticFiles(directory=_STATIC_DST), name="static")
+
+@app.on_event("startup")
+async def startup_event():
+    import core.streamer as streamer
+    print("--- DAG CITY v5.0: PERSISTENT WORKSPACE ---")
+    
+    active_project = _get_workspace_active_project()
+    graph_data = None
+    
+    if active_project:
+        graph_path = os.path.join(PROJECTS_DIR, active_project, "graph.json")
+        if os.path.exists(graph_path):
+            print(f"[*] Auto-loading last active project: {active_project}")
+            with open(graph_path) as f:
+                graph_data = json.load(f)
+            sla_path = os.path.join(PROJECTS_DIR, active_project, "sla.json")
+            if os.path.exists(sla_path):
+                with open(sla_path) as f:
+                    graph_data["_sla"] = json.load(f)
+    
+    if not graph_data:
+        graph_data = _get_current_graph()
+
+    viz_file = os.path.join(VIZ_DIR, "index.html")
+    viz.generate(graph_data, viz_file)
+    print(f"[+] Visualization ready at {viz_file}")
+
+    loop = asyncio.get_running_loop()
+    # Initialize global watcher and share it with the streamer
+    watcher_obj = ManifestWatcher(PROJECTS_DIR, loop)
+    watcher_obj.start(recursive=True)
+    streamer.watcher_instance = watcher_obj
+    
+    print(f"[+] Workspace Live Sync active. Watching {PROJECTS_DIR}")
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+    import core.streamer as streamer
+    if streamer.watcher_instance:
+        streamer.watcher_instance.stop()
+
+# Static mount point
+app.mount("/static", StaticFiles(directory=os.path.join(VIZ_DIR, "static")), name="static")
 
 if __name__ == "__main__":
-    # Ensure src is in path for imports
-    sys.path.append(os.path.dirname(__file__))
-    orchestrate()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
