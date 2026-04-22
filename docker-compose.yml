@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  dagcity:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dagcity-viz
+    ports:
+      - "${PORT}:${PORT}"
+    environment:
+      - MANIFEST_PATH=/data/${MANIFEST_SUBPATH}
+      - PORT=${PORT}
+    volumes:
+      - ${HOST_PROJECT_PATH}:/data:ro
+    restart: unless-stopped
