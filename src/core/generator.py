@@ -251,6 +251,49 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 <div id="header">DAG_CITY</div>
 <div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V4.1</div>
 
+<!-- ══ AWAITING DATA OVERLAY ══ -->
+<div id="awaiting-overlay" style="
+  display: none; position: fixed; inset: 0; z-index: 999;
+  background: rgba(0,0,0,0.88); backdrop-filter: blur(20px);
+  flex-direction: column; align-items: center; justify-content: center;
+  font-family: 'Courier New', monospace; text-align: center;
+">
+  <div style="font-size:72px; margin-bottom: 24px; animation: pulse-icon 2s infinite;">📡</div>
+  <div style="font-size: 2.2rem; font-weight: 900; letter-spacing: 8px; color: #00f3ff;
+              text-shadow: 0 0 20px #00f3ff; margin-bottom: 12px;">AWAITING DATA</div>
+  <div style="font-size: 1rem; color: #ffffff66; letter-spacing: 3px; margin-bottom: 40px;">
+    NO MANIFEST FILE FOUND · DROP YOUR DBT PROJECT FOLDER
+  </div>
+  <div id="drop-zone" style="
+    width: min(480px, 88vw); padding: 48px 32px;
+    border: 2px dashed rgba(0,243,255,0.4); border-radius: 20px;
+    background: rgba(0,243,255,0.04); cursor: pointer;
+    transition: all 0.3s; color: #00f3ff;
+  "
+  ondragover="event.preventDefault(); this.style.borderColor='#00f3ff'; this.style.background='rgba(0,243,255,0.1)';"
+  ondragleave="this.style.borderColor='rgba(0,243,255,0.4)'; this.style.background='rgba(0,243,255,0.04)';"
+  ondrop="handleDrop(event);"
+  onclick="document.getElementById('manifest-upload').click();"
+  >
+    <div style="font-size: 3rem; margin-bottom: 16px;">📂</div>
+    <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px;">DROP manifest.json HERE</div>
+    <div style="font-size: 0.85rem; color: #ffffff55;">or click to browse · dbt target/manifest.json</div>
+  </div>
+  <input type="file" id="manifest-upload" accept=".json" style="display:none" onchange="handleFileInput(this)">
+  <div id="upload-status" style="margin-top: 24px; font-size: 0.9rem; color: #39ff14; min-height: 24px;"></div>
+</div>
+<style>
+@keyframes pulse-icon {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.7; }
+}
+#drop-zone:hover {
+  border-color: #00f3ff !important;
+  background: rgba(0,243,255,0.1) !important;
+  box-shadow: 0 0 40px rgba(0,243,255,0.2);
+}
+</style>
+
 <div id="controls-bar">
   <button class="ctrl-btn active" id="btn-rotate">🎥 Auto-Rotate: ON</button>
   <button class="ctrl-btn" id="btn-perf">⏱️ Performance 3D: OFF</button>
@@ -299,11 +342,19 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 <script>
 // ═══════ DATA ═══════
 const RAW = $DATA_PAYLOAD;
+const AWAITING_DATA = RAW.status === 'awaiting_upload';
+
+// ── Show 'Awaiting Data' overlay if no manifest was loaded ───────────────
+if (AWAITING_DATA) {
+  const overlay = document.getElementById('awaiting-overlay');
+  if (overlay) overlay.style.display = 'flex';
+}
 
 // ═══════ PERFORMANCE METRICS ═══════
-const maxTime  = Math.max(...RAW.nodes.map(n => n.execution_time));
-const minTime  = Math.min(...RAW.nodes.map(n => n.execution_time));
-const hasReal  = RAW.meta?.has_real_times || false;
+// Guard against empty array — Math.max/min of empty spread returns ±Infinity
+const maxTime  = RAW.nodes.length ? Math.max(...RAW.nodes.map(n => n.execution_time)) : 0;
+const minTime  = RAW.nodes.length ? Math.min(...RAW.nodes.map(n => n.execution_time)) : 0;
+const hasReal  = RAW.metadata?.has_real_times || false;
 
 const LAYER_PALETTE = {
   "source":       { "color": "#00ff66", "emissive": "#006622" },
@@ -320,7 +371,7 @@ RAW.nodes.forEach(n => { const l = n.layer||'default'; lCnt[l]=(lCnt[l]||0)+1; l
 RAW.nodes.forEach((n, i) => {
   const l  = n.layer||'default';
   n.x = LAYER_X[l] ?? 0;
-  n.z = (lIdx[l] - (lCnt[l]-1)/2) * 70; // INCREASED SPACING for profesional look
+  n.z = (lIdx[l] - (lCnt[l]-1)/2) * 70;
   n.y = 0; lIdx[l]++; n._delay = i * 90;
   nodeMap[n.id] = n;
 });
@@ -1322,6 +1373,52 @@ renderer.domElement.addEventListener('wheel', hideHUD);
 
 helpTrigger.addEventListener('mouseenter', () => { smartHUD.classList.remove('hidden'); });
 helpTrigger.addEventListener('mouseleave', () => { if(userInteracted) smartHUD.classList.add('hidden'); });
+
+// ═══════ DRAG & DROP — Manifest Upload (Awaiting Data Mode) ═══════
+function handleDrop(event) {
+  event.preventDefault();
+  event.currentTarget.style.borderColor = 'rgba(0,243,255,0.4)';
+  event.currentTarget.style.background  = 'rgba(0,243,255,0.04)';
+  const file = event.dataTransfer.files[0];
+  if (file) processManifestFile(file);
+}
+
+function handleFileInput(input) {
+  const file = input.files[0];
+  if (file) processManifestFile(file);
+}
+
+function processManifestFile(file) {
+  const status = document.getElementById('upload-status');
+  if (!file.name.endsWith('.json')) {
+    status.style.color = '#ff2222';
+    status.textContent = '✗ Please drop a valid .json file (e.g. manifest.json)';
+    return;
+  }
+  status.style.color = '#00f3ff';
+  status.textContent = `⏳ Reading ${file.name}...`;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const parsed = JSON.parse(e.target.result);
+      // Basic GIGO: dbt manifest must have 'nodes' and 'metadata' keys
+      if (!parsed.nodes || !parsed.metadata) {
+        status.style.color = '#ff2222';
+        status.textContent = '✗ Not a valid dbt manifest.json — missing nodes or metadata keys.';
+        return;
+      }
+      status.style.color = '#39ff14';
+      status.textContent = `✓ Manifest loaded! Reloading city (${Object.keys(parsed.nodes).length} nodes)...`;
+      // Store in sessionStorage and reload — server-side parse not yet wired; this is the UX hook
+      sessionStorage.setItem('dagcity_local_manifest', e.target.result);
+      setTimeout(() => location.reload(), 1200);
+    } catch(err) {
+      status.style.color = '#ff2222';
+      status.textContent = `✗ JSON parse error: ${err.message}`;
+    }
+  };
+  reader.readAsText(file);
+}
 
 </script>
 </body>

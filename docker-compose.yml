@@ -1,4 +1,5 @@
-version: '3.8'
+# docker-compose.yml — DagCity
+# 'version' key removed (deprecated in Compose v2+)
 
 services:
   dagcity:
@@ -7,10 +8,13 @@ services:
       dockerfile: Dockerfile
     container_name: dagcity-viz
     ports:
-      - "${PORT}:${PORT}"
+      - "${PORT:-8080}:${PORT:-8080}"
     environment:
-      - MANIFEST_PATH=/data/${MANIFEST_SUBPATH}
-      - PORT=${PORT}
+      - MANIFEST_PATH=/data/${MANIFEST_SUBPATH:-target/manifest.json}
+      - PORT=${PORT:-8080}
     volumes:
-      - ${HOST_PROJECT_PATH}:/data:ro
+      # The host path may not exist yet — always mount so the container
+      # starts in 'Awaiting Data' mode; HOST_PROJECT_PATH defaults to a
+      # local ./data directory so Docker Desktop never blocks the start.
+      - ${HOST_PROJECT_PATH:-./data}:/data:ro
     restart: unless-stopped
