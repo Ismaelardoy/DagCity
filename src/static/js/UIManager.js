@@ -479,10 +479,11 @@ export function initRaycaster(renderer, camera) {
       if (foundNode) { let o = h.object; while(o && !meshes.includes(o)) o = o.parent; foundMesh = o; break; }
     }
     if (hoveredBuilding && hoveredBuilding !== foundMesh) {
-      hoveredBuilding.material.forEach(m => m.emissiveIntensity = 0.1); hoveredBuilding = null;
+      hoveredBuilding.userData.isHovered = false;
+      hoveredBuilding = null;
     }
     if (foundNode) {
-      if (foundMesh) { foundMesh.material.forEach(m => m.emissiveIntensity = 0.8); hoveredBuilding = foundMesh; }
+      if (foundMesh) { foundMesh.userData.isHovered = true; hoveredBuilding = foundMesh; }
       tooltip.style.display = 'block';
       tooltip.style.left = (e.clientX+15)+'px'; tooltip.style.top = (e.clientY-38)+'px';
       tooltip.style.color = foundNode.color;

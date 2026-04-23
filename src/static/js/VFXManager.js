@@ -1,0 +1,188 @@
+import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.module.js';
+import { State } from './State.js';
+
+export class VFXManager {
+  constructor(scene) {
+    this.scene = scene;
+    this.smokeTex = this.createCircleTexture('#555555');
+    this.sparkTex = this.createCircleTexture('#ffffff');
+    this.fireTex  = this.createFireTexture();
+  }
+
+  createCircleTexture(color) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(canvas);
+  }
+
+  createFireTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(64, 128, 64, 0);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.2, '#fff700');
+    grad.addColorStop(0.5, '#ff6600');
+    grad.addColorStop(0.8, '#ff3300');
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(64, 0);
+    ctx.bezierCurveTo(90, 40, 110, 80, 100, 128);
+    ctx.lineTo(28, 128);
+    ctx.bezierCurveTo(18, 80, 38, 40, 64, 0);
+    ctx.fill();
+    return new THREE.CanvasTexture(canvas);
+  }
+
+  createThermalGroup(height) {
+    const group = new THREE.Group();
+    group.name = 'vfx_thermal';
+    
+    // Smoke System
+    const smokeSystem = new THREE.Group();
+    smokeSystem.name = 'vfx_smoke';
+    for (let i = 0; i < 15; i++) {
+      const mat = new THREE.SpriteMaterial({ map: this.smokeTex, transparent: true, opacity: 0, blending: THREE.NormalBlending });
+      const s = new THREE.Sprite(mat);
+      s.userData = { 
+        phase: Math.random() * Math.PI * 2, 
+        speed: 0.2 + Math.random() * 0.3, 
+        life: Math.random(),
+        offset: new THREE.Vector3((Math.random()-0.5)*10, height, (Math.random()-0.5)*10)
+      };
+      smokeSystem.add(s);
+    }
+    group.add(smokeSystem);
+
+    // Spark System
+    const sparkSystem = new THREE.Group();
+    sparkSystem.name = 'vfx_sparks';
+    for (let i = 0; i < 20; i++) {
+      const mat = new THREE.SpriteMaterial({ map: this.sparkTex, transparent: true, opacity: 0, blending: THREE.AdditiveBlending });
+      const s = new THREE.Sprite(mat);
+      s.userData = { 
+        vel: new THREE.Vector3((Math.random()-0.5)*40, 30 + Math.random()*50, (Math.random()-0.5)*40),
+        life: 1.0,
+        age: 1.0
+      };
+      sparkSystem.add(s);
+    }
+    group.add(sparkSystem);
+
+    // Fire System
+    const fireSystem = new THREE.Group();
+    fireSystem.name = 'vfx_fire';
+    for (let i = 0; i < 20; i++) {
+      const mat = new THREE.SpriteMaterial({ map: this.fireTex, transparent: true, opacity: 0, blending: THREE.AdditiveBlending });
+      const s = new THREE.Sprite(mat);
+      s.userData = { 
+        phase: Math.random() * Math.PI * 2, 
+        speed: 0.8 + Math.random() * 0.5,
+        offset: new THREE.Vector2((Math.random()-0.5)*12, (Math.random()-0.5)*12)
+      };
+      fireSystem.add(s);
+    }
+    group.add(fireSystem);
+
+    group.visible = false;
+    return group;
+  }
+
+  update(meshes, t, dt, critSet) {
+    const selectedNode = State.selectedNode;
+
+    meshes.forEach(m => {
+      const ud = m.userData;
+      const n = ud.node;
+      const vfx = m.children.find(c => c.name === 'vfx_thermal');
+      if (!vfx) return;
+
+      // 1. Calculate SLA Ratio
+      let slaTarget = State.slaNodes[n.id] || State.slaZones[n.layer] || State.userDefinedSLA;
+      if (!slaTarget || slaTarget <= 0) slaTarget = 1; // Prevent div by zero
+      
+      const ratio = n.execution_time / slaTarget;
+      const isError = n.status === 'error' || n.state === 'error';
+      
+      const inFocus = !selectedNode || critSet.has(n.id);
+      const isVisible = (ratio >= 1.0 || isError) && State.perfMode && inFocus;
+      vfx.visible = isVisible;
+
+      if (!isVisible) {
+        m.material.forEach(mat => { if (mat.emissiveIntensity > 0.2) mat.emissiveIntensity -= 0.05; });
+        return;
+      }
+
+      const smoke = vfx.children.find(c => c.name === 'vfx_smoke');
+      const sparks = vfx.children.find(c => c.name === 'vfx_sparks');
+      const fire  = vfx.children.find(c => c.name === 'vfx_fire');
+
+      // Calculate current building height for VFX positioning
+      const currentH = ud.baseH * m.scale.y;
+
+      // Nivel 1+: Smoke (Ratio >= 1.0)
+      smoke.children.forEach(s => {
+        const sud = s.userData;
+        sud.life = (sud.life + dt * 0.4) % 1.0;
+        const drift = sud.life * 60;
+        s.position.set(
+          sud.offset.x + Math.sin(t * 2 + sud.phase) * 4,
+          (currentH + drift) / m.scale.y, 
+          sud.offset.z + Math.cos(t * 2 + sud.phase) * 4
+        );
+        s.material.opacity = Math.sin(sud.life * Math.PI) * 0.45;
+        s.scale.setScalar((8 + sud.life * 30) / m.scale.y);
+      });
+
+      // Nivel 2+: Sparks & Flicker (Ratio >= 1.2 o Error)
+      if (ratio >= 1.2 || isError) {
+        sparks.visible = true;
+        sparks.children.forEach(s => {
+          const sud = s.userData;
+          sud.age += dt * 2.5;
+          if (sud.age > 1.0) {
+             sud.age = 0;
+             s.position.set((Math.random()-0.5)*12, currentH / m.scale.y, (Math.random()-0.5)*12);
+             sud.vel.set((Math.random()-0.5)*120, 100 + Math.random()*150, (Math.random()-0.5)*120);
+          }
+          s.position.addScaledVector(sud.vel, dt / m.scale.y);
+          sud.vel.y -= 350 * dt; // Gravity
+          s.material.opacity = (1.0 - sud.age) * 0.9;
+          s.scale.setScalar(2.0 * (1.0 - sud.age) / m.scale.y);
+        });
+
+        // Glitch flicker
+        if (Math.random() > 0.88) {
+          m.material.forEach(mat => { mat.emissiveIntensity = 1.0 + Math.random() * 3.0; });
+        } else {
+          m.material.forEach(mat => { mat.emissiveIntensity += (1.0 - mat.emissiveIntensity) * 0.15; });
+        }
+      } else {
+        sparks.visible = false;
+        m.material.forEach(mat => { mat.emissiveIntensity += (0.2 - mat.emissiveIntensity) * 0.1; });
+      }
+
+      // Nivel 3: Fire (Ratio >= 1.5 o Error)
+      if (ratio >= 1.5 || isError) {
+        fire.visible = true;
+        fire.children.forEach(f => {
+          const fud = f.userData;
+          const life = (t * fud.speed + fud.phase) % 1.0;
+          const age = 1.0 - life;
+          f.position.set(fud.offset.x * age, (currentH + life * 50) / m.scale.y, fud.offset.y * age);
+          f.scale.setScalar(20 * age / m.scale.y);
+          f.material.opacity = age * 0.9;
+        });
+      } else {
+        fire.visible = false;
+      }
+    });
+  }
+}

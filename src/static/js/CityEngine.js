@@ -3,6 +3,11 @@
 // ═══════════════════════════════════════════════════════
 import { State } from './State.js';
 import { scene, camera, renderer, controls, INIT_CAM } from './Visualizer.js';
+import { VFXManager } from './VFXManager.js';
+
+let vfxManager = null;
+const clock = new THREE.Clock();
+
 
 // ── Constants ──────────────────────────────────────────
 export const LAYER_X = { source: -300, staging: -100, intermediate: 100, mart: 300, consumption: 500, default: 650 };
@@ -13,6 +18,7 @@ export const nodeMeshMap = {};
 export const edgeObjs = [];
 export const voxels  = [];
 export const nodeMap = {};
+export const islandLabels = [];
 
 export let maxTime = 0, minTime = 0, hasReal = false;
 export let buildStart = performance.now();
@@ -81,14 +87,15 @@ export function easeOutBack(x) {
   return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
 }
 
-export function getFullLineage(id) {
-  const vis = new Set(), q = [id];
-  while (q.length) {
-    const cur = q.shift(); if (vis.has(cur)) continue; vis.add(cur);
-    const n = nodeMap[cur];
-    if (n) { (n.upstream||[]).forEach(u => q.push(u)); (n.downstream||[]).forEach(d => q.push(d)); }
+export function getLineageSets(id) {
+  const ancestors = new Set(), descendants = new Set();
+  const n = nodeMap[id];
+  if (n) {
+    // Level 1 only: Direct parents and children
+    (n.upstream || []).forEach(u => ancestors.add(u));
+    (n.downstream || []).forEach(d => descendants.add(d));
   }
-  return vis;
+  return { ancestors, descendants };
 }
 
 export function findNodeInHierarchy(obj) {
@@ -226,35 +233,10 @@ export function buildBuilding(n) {
   halo.position.set(0, h/2, 0); halo.name = 'halo'; halo.visible = false;
   mesh.add(halo);
 
-  // Fire group
-  const fireGroup = new THREE.Group(); fireGroup.name = 'fire'; fireGroup.visible = false;
-  ensureTextures();
-  for (let i = 0; i < 48; i++) {
-    const f = new THREE.Sprite(new THREE.SpriteMaterial({map:FLAME_TEX, blending:THREE.AdditiveBlending, transparent:true, opacity:0.6, depthWrite:false}));
-
-    const gx = ((i % 8) / 7 - 0.5) * 14;
-    const gz = (Math.floor(i / 8) / 6 - 0.5) * 14;
-    const distFromCenter = Math.sqrt(gx*gx + gz*gz);
-    const pyramidFactor = Math.max(0.1, 1.0 - (distFromCenter / 12));
-    f.position.set(gx, h, gz);
-    f.userData = { phase: i * 1.6, speed: 0.06, baseScale: 20 * pyramidFactor, pyramidFactor, offsetX: gx, offsetZ: gz };
-    fireGroup.add(f);
-  }
-  for (let i = 0; i < 10; i++) {
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({map:EMBER_TEX, blending:THREE.AdditiveBlending, transparent:true, opacity:0.5, depthWrite:false}));
-    s.position.set(((i % 4) - 1.5) * 4, h, (Math.floor(i / 4) - 1.5) * 4);
-    s.userData = { phase: i * 3.1, speed: 0.15, baseScale: 2.5, isEmber: true };
-    s.scale.setScalar(s.userData.baseScale);
-    fireGroup.add(s);
-  }
-  for (let i = 0; i < 8; i++) {
-    const sm = new THREE.Sprite(new THREE.SpriteMaterial({map:SMOKE_TEX, transparent:true, opacity:0.2, depthWrite:false}));
-
-    sm.position.set(((i % 4) - 1.5) * 3, h + 10, (Math.floor(i / 4) - 0.5) * 3);
-    sm.userData = { phase: i * 5.0, speed: 0.04, baseScale: 32, isSmoke: true };
-    fireGroup.add(sm);
-  }
-  mesh.add(fireGroup);
+  // Thermal Degradation VFX
+  if (!vfxManager) vfxManager = new VFXManager(scene);
+  const thermalGroup = vfxManager.createThermalGroup(h);
+  mesh.add(thermalGroup);
 
   const glow = new THREE.PointLight(col, 1.5, 42);
   glow.position.set(0, 2, 0); mesh.add(glow);
@@ -277,26 +259,47 @@ export function buildEdge(link) {
   const tgtId = typeof link.target==='object'?link.target.id:link.target;
   const src = nodeMap[srcId], tgt = nodeMap[tgtId];
   if (!src || !tgt) return;
+  
+  const isInterIsland = (src.group || 'default') !== (tgt.group || 'default');
+
   const A = new THREE.Vector3(src.x, 10, src.z);
   const B = new THREE.Vector3(tgt.x, 10, tgt.z);
-  const mid = A.clone().lerp(B, 0.5).add(new THREE.Vector3(0, 22, 0));
+  
+  let midY = 22;
+  let color = 0x0a3344;
+  let opacity = 0.45;
+  let particleColor = 0xffffff;
+  let pSize = 0.75;
+  
+  if (isInterIsland) {
+    const dist = A.distanceTo(B);
+    midY = Math.max(400, dist * 0.35); 
+    color = 0xffdf00; // Neon Gold
+    opacity = 0.8;
+    particleColor = 0xffffff;
+    pSize = 2.5;
+  }
+
+  const mid = A.clone().lerp(B, 0.5).add(new THREE.Vector3(0, midY, 0));
   const curve = new THREE.QuadraticBezierCurve3(A, mid, B);
-  const pts = curve.getPoints(42);
+  const pts = curve.getPoints(isInterIsland ? 80 : 42);
   const geo = new THREE.BufferGeometry().setFromPoints(pts);
-  const mat = new THREE.LineBasicMaterial({color:0x0a3344,transparent:true,opacity:0.45});
+  const mat = new THREE.LineBasicMaterial({color, transparent:true, opacity});
   const line = new THREE.Line(geo, mat); scene.add(line);
-  const N = 5, particles = [];
+  
+  const N = isInterIsland ? 12 : 5;
+  const particles = [];
   for (let i = 0; i < N; i++) {
-    const pGeo = new THREE.SphereGeometry(0.75, 8, 8);
-    const pMat = new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.25});
+    const pGeo = new THREE.SphereGeometry(pSize, 8, 8);
+    const pMat = new THREE.MeshBasicMaterial({color: particleColor, transparent:true, opacity: isInterIsland ? 0.8 : 0.25});
     const p = new THREE.Mesh(pGeo, pMat);
     const tgtNode = nodeMap[tgtId];
     const isAccelerated = tgtNode && tgtNode.layer === 'mart';
-    const baseSpeed = 0.005;
+    const baseSpeed = isInterIsland ? 0.002 : 0.005;
     p.userData = { curve, t: i/N, speed: isAccelerated ? baseSpeed * 1.8 : baseSpeed };
     scene.add(p); particles.push(p);
   }
-  edgeObjs.push({ line, particles, curve, src: srcId, tgt: tgtId });
+  edgeObjs.push({ line, particles, curve, src: srcId, tgt: tgtId, isInterIsland });
 }
 
 // ── SLA Fire Logic ─────────────────────────────────────
@@ -340,29 +343,41 @@ export function updateFires() {
 // ── Selection ──────────────────────────────────────────
 export function applySelection(node) {
   critSet = new Set();
-  selectedNode = node;
+  State.set('selectedNode', node);
   const highlightColor = node ? new THREE.Color(node.color) : new THREE.Color(0x00d4e8);
+  
+  let ancSet = new Set(), descSet = new Set();
+  if (node) {
+    const sets = getLineageSets(node.id);
+    ancSet = sets.ancestors;
+    descSet = sets.descendants;
+    critSet = new Set([...ancSet, ...descSet]);
+  }
+
   meshes.forEach(m => {
     const n = m.userData.node; if (!n) return;
     const id = n.id;
-    let inSet = true;
-    if (node) { if (!critSet.size) critSet = getFullLineage(node.id); inSet = critSet.has(id); }
-    const alpha = inSet ? 1.0 : 0.07;
-    m.material.forEach(mat => { mat.opacity = alpha; mat.transparent = true; mat.depthWrite = (alpha > 0.1); });
+    const inSet = node ? critSet.has(id) : true;
     m.children.forEach(child => {
-      if (child.isLineSegments) child.material.opacity = inSet ? 0.9 : 0.03;
-      if (child.isLight)  child.intensity = inSet ? (node && id===node.id ? 5.0 : 1.5) : 0.05;
-      if (child.isSprite) child.material.opacity = inSet ? 1.0 : 0.07;
+      // GHOST MODE: Subtle outlines and labels for reference
+      if (child.isLineSegments) child.material.opacity = inSet ? 0.9 : 0.05;
+      if (child.isLight)  child.intensity = inSet ? (node && id===node.id ? 5.0 : 1.5) : 0.0;
+      if (child.isSprite) child.material.opacity = inSet ? 1.0 : 0.08;
     });
   });
   edgeObjs.forEach(e => {
-    const isConnected = node && (e.src === node.id || e.tgt === node.id);
-    const inPath = node ? isConnected : true;
-    e.line.material.opacity   = node ? (inPath ? 1.0 : 0.02) : 0.45;
-    e.line.material.color.copy(node && inPath ? highlightColor : new THREE.Color(0x0a3344));
+    // CRITICAL FIX: Only light edges that DIRECTLY TOUCH the selected cube
+    const inPath = node ? (e.src === node.id || e.tgt === node.id) : true;
+    
+    const ghostColor = new THREE.Color(0x0a1114);
+    const defaultColor = new THREE.Color(e.isInterIsland ? 0xffdf00 : 0x0a3344);
+    
+    e.line.material.opacity   = node ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : 0.0) : (e.isInterIsland ? 0.8 : 0.45);
+    e.line.material.color.copy(node ? (inPath ? highlightColor : ghostColor) : defaultColor);
     e.line.renderOrder = inPath ? 10 : 0;
+    
     e.particles.forEach(p => {
-      p.material.opacity = node ? (inPath ? 1.0 : 0.0) : 0.25;
+      p.material.opacity = node ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : 0.0) : (e.isInterIsland ? 0.8 : 0.25);
       p.material.color.copy(node && inPath ? highlightColor : new THREE.Color(0xffffff));
       p.scale.setScalar(inPath && node ? 2.5 : 1.0);
     });
@@ -456,6 +471,13 @@ export function rebuildCity(graphData, isLiveSync = false) {
   edgeObjs.length = 0;
   Object.keys(nodeMap).forEach(k => delete nodeMap[k]);
   
+  islandLabels.forEach(l => {
+    scene.remove(l);
+    if (l.material && l.material.map) l.material.map.dispose();
+    if (l.material) l.material.dispose();
+  });
+  islandLabels.length = 0;
+  
   // Preserve selection if possible
   const prevSelectedId = selectedNode ? selectedNode.id : null;
   selectedNode = null; critSet = new Set();
@@ -464,13 +486,40 @@ export function rebuildCity(graphData, isLiveSync = false) {
   minTime = nodes.length ? Math.min(...nodes.map(n => n.execution_time || 0)) : 0;
   hasReal = graphData.metadata?.has_real_times || false;
 
+  const projects = [...new Set(nodes.map(n => n.group || 'default'))];
+  const projectCenters = {};
+  const radius = projects.length > 1 ? Math.max(1500, projects.length * 600) : 0;
+  projects.forEach((p, i) => {
+    const angle = (i / projects.length) * Math.PI * 2;
+    projectCenters[p] = {
+      dx: projects.length > 1 ? Math.cos(angle) * radius : 0,
+      dz: projects.length > 1 ? Math.sin(angle) * radius : 0
+    };
+    
+    const labelSprite = makeSprite(`ISLAND: ${p.toUpperCase()}`, '#ffdf00');
+    labelSprite.scale.set(labelSprite.scale.x * 6, labelSprite.scale.y * 6, 1);
+    labelSprite.position.set(projectCenters[p].dx, 600, projectCenters[p].dz);
+    scene.add(labelSprite);
+    islandLabels.push(labelSprite);
+  });
+
   const lC = {}, lI = {};
-  nodes.forEach(n => { const l = n.layer||'default'; lC[l]=(lC[l]||0)+1; lI[l]=0; });
+  nodes.forEach(n => { 
+    const p = n.group || 'default';
+    const l = n.layer||'default'; 
+    const key = p + '_' + l;
+    lC[key] = (lC[key]||0)+1; 
+    lI[key] = 0; 
+  });
   nodes.forEach(n => {
+    const p = n.group || 'default';
     const l = n.layer||'default';
-    n.x = LAYER_X[l] ?? 0;
-    n.z = (lI[l] - (lC[l]-1)/2) * 70;
-    n.y = 0; lI[l]++;
+    const key = p + '_' + l;
+    const center = projectCenters[p];
+    n.x = (LAYER_X[l] ?? 0) + center.dx;
+    n.z = (lI[key] - (lC[key]-1)/2) * 70 + center.dz;
+    n.y = 0; 
+    lI[key]++;
     nodeMap[n.id] = n;
   });
 
@@ -526,19 +575,17 @@ function updateDroneMovement() {
 }
 
 // ── Animation Loop ─────────────────────────────────────
-let clock;
-
 export function startAnimationLoop() {
-  if (!clock) clock = new THREE.Clock();
   function animate() {
-
     requestAnimationFrame(animate);
-    const now = performance.now();
+
+    const dt  = clock.getDelta();
     const t   = clock.getElapsedTime();
+    const now = performance.now();
 
     if (camTween) {
       const prog = Math.min(1, (now - camTween.start) / camTween.dur);
-      const ease = prog < 0.5 ? 4*prog*prog*prog : 1 - Math.pow(-2*prog+2,3)/2;
+      const ease = prog < 0.5 ? 4 * prog * prog * prog : 1 - Math.pow(-2 * prog + 2, 3) / 2;
       camera.position.lerpVectors(camTween.sp, camTween.ep, ease);
       controls.target.lerpVectors(camTween.st, camTween.et, ease);
       if (prog >= 1) camTween = null;
@@ -555,6 +602,9 @@ export function startAnimationLoop() {
 
     meshes.forEach(m => {
       const ud = m.userData;
+      const n = ud.node;
+      const isGhost = n.is_dead_end;
+      const isBottleneck = n.is_bottleneck;
 
       // Height tween
       const hDiff = ud.targetH - ud.currentH;
@@ -566,9 +616,9 @@ export function startAnimationLoop() {
       if (ud.voxel) {
         if (globalElapsed < 800) {
           const vProg = Math.min(1, globalElapsed / 800);
-          const vScale = vProg < 1 ? easeOutBack(vProg) : 1;
+          const vScale = vProg < 1 ? 1.0 : 1; // Simplified ease
           ud.voxel.scale.setScalar(vScale * 1.3); ud.voxel.visible = true;
-          ud.voxel.rotation.y += 0.05; ud.voxel.material.emissiveIntensity = 1.5 + Math.sin(now * 0.02) * 3;
+          ud.voxel.rotation.y += 0.05;
         }
         if (isMimicry) {
           const mElapsed = globalElapsed - 1000;
@@ -576,7 +626,13 @@ export function startAnimationLoop() {
           ud.voxel.material.opacity = 1 - mProg;
           if (mProg > 0.99) ud.voxel.visible = false;
           m.visible = true; sY = mProg * currentScale; m.scale.y = sY;
-          m.material.forEach(mat => { mat.transparent = true; mat.opacity = mProg * (ud.node.is_dead_end ? 0.35 : 1.0); });
+          
+          if (!State.selectedNode) {
+            m.material.forEach(mat => { 
+              mat.transparent = true; 
+              mat.opacity = mProg * (n.is_dead_end ? 0.35 : 1.0); 
+            });
+          }
         } else {
           m.visible = false;
         }
@@ -602,16 +658,7 @@ export function startAnimationLoop() {
         }
       }
 
-      if (ud.hazard) {
-        const safeSY = Math.max(0.001, sY);
-        ud.hazard.position.y = ud.baseH + (22 / safeSY);
-        ud.hazard.scale.set(15, 15 / safeSY, 1);
-      }
-
-      const isGhost = ud.node.is_dead_end;
-      const isBottleneck = ud.node.is_bottleneck;
-
-      m.position.set(ud.node.x, 0, ud.node.z);
+      m.position.set(n.x, 0, n.z);
 
       if (m.material && Array.isArray(m.material)) {
         m.material.forEach(mat => {
@@ -621,12 +668,33 @@ export function startAnimationLoop() {
             else if (isBottleneck) { const heat = 0.5+Math.sin(t*4)*0.45; mat.emissive.set(0xff3300); mat.emissiveIntensity = heat*1.5; }
             else { mat.emissive.set(0x00f3ff); mat.emissiveIntensity = 0.2; }
           } else {
-            mat.color.set(ud.node.color);
-            mat.opacity = isGhost ? 0.35 : (selectedNode && !critSet.has(ud.node.id) ? 0.07 : 1.0);
+            mat.color.set(n.color);
             mat.metalness = 0.6; mat.roughness = 0.45;
-            if (isGhost) { const pulse=(Math.sin(t*4.5)+1)/2; const pSq=Math.pow(pulse,2); mat.emissive.set(0xff0000); mat.emissiveIntensity=0.5+pSq*6.0; }
-            else if (isBottleneck && State.perfMode) { const heat=0.5+Math.sin(t*4)*0.45; mat.emissive.set(0xff3300); mat.emissiveIntensity=heat*2.5; }
-            else { mat.emissive.set(ud.baseEmis||0x000000); mat.emissiveIntensity=0.1; }
+            
+            let targetOpacity = 1.0;
+            let targetEmissiveIntensity = 0.1;
+            let targetEmissiveColor = ud.baseEmis || 0x000000;
+            
+            if (State.selectedNode) {
+              const inSet = (n.id === State.selectedNode.id || critSet.has(n.id));
+              if (inSet) {
+                targetOpacity = 1.0;
+                targetEmissiveIntensity = (n.id === State.selectedNode.id) ? 1.5 : 0.8;
+                targetEmissiveColor = n.color;
+              } else {
+                targetOpacity = 0.03;
+                targetEmissiveIntensity = 0.0;
+                targetEmissiveColor = 0x000000;
+              }
+            } else {
+              if (isGhost) { targetOpacity = 0.35; targetEmissiveIntensity = 0.4; targetEmissiveColor = 0xff0000; }
+              else if (isBottleneck) { targetEmissiveIntensity = 0.6; targetEmissiveColor = 0xffaa00; }
+            }
+
+            mat.opacity += (targetOpacity - mat.opacity) * 0.1;
+            mat.emissive.lerp(new THREE.Color(targetEmissiveColor), 0.1);
+            mat.emissiveIntensity += (targetEmissiveIntensity - mat.emissiveIntensity) * 0.1;
+            mat.depthWrite = (mat.opacity > 0.2);
           }
           mat.transparent = true;
         });
@@ -635,62 +703,31 @@ export function startAnimationLoop() {
       const timeLabel = ud.timeLabel;
       if (timeLabel) {
         const dist = camera.position.distanceTo(m.position);
-        const shouldShow = State.perfMode && (isBottleneck || dist < 800 || (selectedNode && selectedNode.id === ud.node.id));
-        timeLabel.visible = shouldShow;
-        if (shouldShow) {
+        const isSelected = (State.selectedNode && State.selectedNode.id === n.id);
+        const inFocus = (!State.selectedNode || critSet.has(n.id));
+        const shouldShow = State.perfMode && (isBottleneck || dist < 800 || isSelected);
+
+        if (shouldShow && inFocus) {
+          timeLabel.visible = true;
           const safeSY = Math.max(0.001, sY);
           const yOff = isGhost ? 30 : (isBottleneck ? 42 : 28);
           timeLabel.position.y = ud.baseH + (yOff / safeSY);
           const baseW = isBottleneck ? 55 : 36, baseHt = isBottleneck ? 22 : 14.4;
           timeLabel.scale.set(baseW, baseHt / safeSY, 1);
-          if (isBottleneck) { const flash=(Math.sin(t*10)+1)/2; timeLabel.material.opacity=0.7+flash*0.3; }
-          else { timeLabel.material.opacity = Math.min(1.0, (800-dist)/150); }
+          if (isBottleneck) {
+            const flash = (Math.sin(t * 10) + 1) / 2;
+            timeLabel.material.opacity = 0.7 + flash * 0.3;
+          } else {
+            timeLabel.material.opacity = Math.min(1.0, (800 - dist) / 150);
+          }
+        } else {
+          timeLabel.visible = false;
         }
       }
 
-      // Fire animation
-      const fire = m.children.find(c => c.name==='fire');
-      const halo = m.children.find(c => c.name==='halo');
-      if (fire) {
-        fire.visible = isBottleneck && State.perfMode && m.visible;
-        if (halo) { halo.visible = isBottleneck && State.perfMode && m.visible; halo.intensity = 2.5 + Math.sin(t*8)*1.5; }
-        if (fire.visible) {
-          fire.children.forEach(f => {
-            const udF = f.userData;
-            const fsY = Math.max(0.011, m.scale.y);
-            const globalPhase = t * udF.speed * 60 + udF.phase;
-            const sway = Math.sin(t * 2.5) * 1.8;
-            if (udF.isSmoke) {
-              const smokeCycle = globalPhase % 70;
-              f.position.y = ud.baseH + (12 + smokeCycle) / fsY;
-              f.position.x = sway * 1.2;
-              f.material.opacity = Math.max(0, 0.2 - smokeCycle/100) * (fsY > 0.05 ? 1 : 0);
-              f.scale.setScalar(udF.baseScale * (1 + smokeCycle/30) / fsY);
-            } else if (udF.isEmber) {
-              const emberCycle = globalPhase % 60;
-              f.position.y = ud.baseH + emberCycle / fsY;
-              f.position.x = (Math.sin(globalPhase*0.5)*5) / fsY;
-              f.position.z = (Math.cos(globalPhase*0.5)*5) / fsY;
-              f.material.opacity = Math.max(0, 1.0 - emberCycle/60);
-            } else {
-              const life = (globalPhase % 25) / 25;
-              const ageFactor = 1.0 - life;
-              f.position.x = (udF.offsetX * ageFactor) + (sway * ageFactor);
-              f.position.z = (udF.offsetZ * ageFactor);
-              const finalScale = udF.baseScale * ageFactor;
-              f.scale.set(finalScale, (finalScale*1.5)/fsY, 1);
-              f.position.y = ud.baseH + ((finalScale*0.4)+(life*32))/fsY;
-              const c = f.material.color;
-              if      (life < 0.25) c.set(0xffffff);
-              else if (life < 0.45) c.set(0xffcc00);
-              else if (life < 0.75) c.set(0xff6600);
-              else                  c.set(0xaa2200);
-              f.material.opacity = ageFactor * ageFactor * 0.98;
-            }
-          });
-        }
+      if (vfxManager) {
+        vfxManager.update([m], t, dt, critSet);
       }
-      if (halo && !fire) halo.intensity = 3.2 + Math.sin(t*5)*1.5;
     });
 
     edgeObjs.forEach(e => {
@@ -707,8 +744,6 @@ export function startAnimationLoop() {
   animate();
 }
 
-// ── Forward-declare _dzHideOverlay (resolved by DataManager) ──
-// DataManager injects this into window so CityEngine can call it.
 function _dzHideOverlay() {
   if (window._dzHideOverlay) return window._dzHideOverlay();
   return Promise.resolve();
