@@ -263,8 +263,11 @@ def shutdown_event():
     if streamer.watcher_instance:
         streamer.watcher_instance.stop()
 
-# Static mount point
-app.mount("/static", StaticFiles(directory=os.path.join(VIZ_DIR, "static")), name="static")
+# Static mount point with safety check
+static_path = os.path.join(VIZ_DIR, "static")
+os.makedirs(static_path, exist_ok=True)
+print(f"[DEBUG] Mounting static files from: {static_path}")
+app.mount("/static", StaticFiles(directory=static_path), name="static")
 
 if __name__ == "__main__":
     import uvicorn

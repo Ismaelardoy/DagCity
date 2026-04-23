@@ -13,6 +13,12 @@ export const State = {
   slaZones: {},         // layer -> threshold
   slaNodes: {},         // nodeId -> threshold
 
+  // ── Engine & Viewport ─────────────────────────────
+  camSensitivity: 1.0,
+  neonIntensity: 0.0,
+  showLabels: true,
+  showParticles: true,
+
   // ── UI ──────────────────────────────────────────────
   perfMode: false,
   selectedNode: null,

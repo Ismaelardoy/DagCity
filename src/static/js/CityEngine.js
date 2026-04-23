@@ -2,7 +2,10 @@
 // CityEngine.js — Buildings, Edges, Fire, Animation Loop
 // ═══════════════════════════════════════════════════════
 import { State } from './State.js';
-import { scene, camera, renderer, controls, INIT_CAM } from './Visualizer.js';
+import {
+  scene, camera, renderer, controls, 
+  initScene, INIT_CAM, composer
+} from './Visualizer.js';
 import { VFXManager } from './VFXManager.js';
 
 let vfxManager = null;
@@ -497,6 +500,7 @@ export function rebuildCity(graphData, isLiveSync = false) {
     };
     
     const labelSprite = makeSprite(`ISLAND: ${p.toUpperCase()}`, '#ffdf00');
+    labelSprite.name = 'islandLabel';
     labelSprite.scale.set(labelSprite.scale.x * 6, labelSprite.scale.y * 6, 1);
     labelSprite.position.set(projectCenters[p].dx, 600, projectCenters[p].dz);
     scene.add(labelSprite);
@@ -739,7 +743,11 @@ export function startAnimationLoop() {
     });
 
     controls.update();
-    renderer.render(scene, camera);
+    if (composer) {
+      composer.render();
+    } else {
+      renderer.render(scene, camera);
+    }
   }
   animate();
 }

@@ -200,6 +200,34 @@ input[type=range].sla-input::-webkit-slider-thumb {
 .sla-del { color: var(--red); cursor: pointer; font-size: 16px; padding: 4px 8px; flex-shrink: 0; }
 .sla-del:hover { text-shadow: 0 0 8px var(--red); }
 
+/* ── SETTINGS PANEL ── */
+#settings-panel {
+  display: none;
+  position: fixed; top: 0; left: 62px; width: 420px; height: 100vh;
+  background: rgba(2, 6, 18, 0.97);
+  border-right: 1px solid rgba(0,242,255,0.2);
+  z-index: 600;
+  flex-direction: column;
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  box-shadow: 8px 0 40px rgba(0,0,0,0.6);
+  animation: sla-slide-in 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#settings-panel.open { display: flex; }
+.settings-section { padding: 32px 30px; border-bottom: 1px solid rgba(0,242,255,0.06); }
+.settings-label { font-size: 13px; color: var(--magenta); letter-spacing: 4px; margin-bottom: 22px; text-transform: uppercase; font-weight: bold; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.settings-name { font-size: 15px; color: #fff; letter-spacing: 1px; }
+.settings-val { font-size: 18px; font-weight: 900; color: var(--cyan); text-shadow: 0 0 8px var(--cyan); }
+
+/* Toggle Switches */
+.switch { position: relative; display: inline-block; width: 44px; height: 22px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: .4s; border-radius: 34px; border: 1px solid rgba(0,242,255,0.2); }
+.slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 4px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; box-shadow: 0 0 10px rgba(0,242,255,0.5); }
+input:checked + .slider { background-color: rgba(0,242,255,0.2); border-color: var(--cyan); }
+input:checked + .slider:before { transform: translateX(21px); background-color: var(--cyan); }
+
 /* ── PROJECT MODAL ── */
 #project-modal {
   display: none; position: fixed; inset: 0; z-index: 900;
@@ -723,7 +751,7 @@ input[type=range].sla-input::-webkit-slider-thumb {
 <div id="js-error-overlay"></div>
 <div id="canvas-container"></div>
 <div id="header">DAG_CITY</div>
-<div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V5.1</div>
+<div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V5.2</div>
 
 <!-- AWAITING DATA OVERLAY / HUB -->
 <div id="awaiting-overlay" style="display:none;">
@@ -862,6 +890,10 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
       <span class="dock-icon">📁</span>
       <span class="dock-label">PROJECT MANAGER</span>
     </div>
+    <div class="dock-item" id="dock-settings" title="Engine Settings">
+      <span class="dock-icon">⚙️</span>
+      <span class="dock-label">VIEWPORT & ENGINE</span>
+    </div>
   </div>
   <div class="dock-divider"></div>
   <div class="dock-section">
@@ -957,6 +989,61 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
   </div>
 </div>
 
+<!-- SETTINGS DRAWER -->
+<div id="settings-panel">
+  <div id="sla-header">
+    <div id="sla-title">⚙️ ENGINE CONTROLS</div>
+    <div id="settings-close" style="width:32px;height:32px;border-radius:50%;border:1px solid rgba(0,242,255,0.3);background:rgba(0,242,255,0.06);color:var(--cyan);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;">✕</div>
+  </div>
+  <div id="sla-body">
+    <div class="settings-section">
+      <div class="settings-label">Camera & Input</div>
+      <div class="settings-row">
+        <div class="settings-name">Navigation Sensitivity</div>
+        <div class="settings-val" id="val-cam-sens">1.0x</div>
+      </div>
+      <div class="sla-slider-track">
+        <div class="sla-slider-fill" id="fill-cam-sens" style="width:33%"></div>
+        <input type="range" class="sla-input" id="input-cam-sens" min="50" max="200" value="100">
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-label">Post-Processing</div>
+      <div class="settings-row">
+        <div class="settings-name">Neon Bloom Intensity</div>
+        <div class="settings-val" id="val-bloom">0.0</div>
+      </div>
+      <div class="sla-slider-track">
+        <div class="sla-slider-fill" id="fill-bloom" style="width:0%"></div>
+        <input type="range" class="sla-input" id="input-bloom" min="0" max="200" value="0">
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-label">Visibility & Quality</div>
+      
+      <div class="settings-row">
+        <div class="settings-name">Show Building Labels</div>
+        <label class="switch">
+          <input type="checkbox" id="check-labels" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="sla-desc" style="margin-top:-5px;margin-bottom:20px;">Hide names for a cleaner cinematic view</div>
+
+      <div class="settings-row">
+        <div class="settings-name">Enable Particle VFX</div>
+        <label class="switch">
+          <input type="checkbox" id="check-vfx" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="sla-desc" style="margin-top:-5px;">Toggle smoke, sparks and fire (Performance)</div>
+    </div>
+  </div>
+</div>
+
 <div id="sidebar">
   <div id="sb-stripe"></div>
   <button id="sb-close">✕</button>
@@ -983,6 +1070,12 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
 <!-- Three.js CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 
 <!-- Data injection -->
 <script>

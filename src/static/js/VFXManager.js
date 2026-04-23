@@ -104,46 +104,41 @@ export class VFXManager {
       const vfx = m.children.find(c => c.name === 'vfx_thermal');
       if (!vfx) return;
 
-      // 1. Calculate SLA Ratio
-      let slaTarget = State.slaNodes[n.id] || State.slaZones[n.layer] || State.userDefinedSLA;
-      if (!slaTarget || slaTarget <= 0) slaTarget = 1; // Prevent div by zero
+      // 1. Calculate SLA Ratio (Robust check for 0s)
+      let slaTarget = State.slaNodes[n.id];
+      if (slaTarget === undefined) slaTarget = State.slaZones[n.layer];
+      if (slaTarget === undefined) slaTarget = State.userDefinedSLA;
       
-      const ratio = n.execution_time / slaTarget;
+      const ratio = (slaTarget <= 0) ? 999 : (n.execution_time / slaTarget);
       const isError = n.status === 'error' || n.state === 'error';
-      
-      const inFocus = !selectedNode || critSet.has(n.id);
-      const isVisible = (ratio >= 1.0 || isError) && State.perfMode && inFocus;
-      vfx.visible = isVisible;
+      const smoke  = vfx.children.find(c => c.name === 'vfx_smoke');
+      const sparks = vfx.children.find(c => c.name === 'vfx_sparks');
+      const fire   = vfx.children.find(c => c.name === 'vfx_fire');
+      const currentH = ud.baseH * m.scale.y;
+      vfx.visible = State.perfMode && State.showParticles && (ratio >= 1.0 || isError);
 
-      if (!isVisible) {
-        m.material.forEach(mat => { if (mat.emissiveIntensity > 0.2) mat.emissiveIntensity -= 0.05; });
-        return;
+      // ── Level 1: Smoke (Ratio >= 1.0) ─────────────────
+      const showSmoke = (ratio >= 1.0 || isError) && State.perfMode && State.showParticles;
+      smoke.visible = showSmoke;
+      if (showSmoke) {
+        smoke.children.forEach(s => {
+          const sud = s.userData;
+          sud.life = (sud.life + dt * 0.4) % 1.0;
+          const drift = sud.life * 60;
+          s.position.set(
+            sud.offset.x + Math.sin(t * 2 + sud.phase) * 4,
+            (currentH + drift) / m.scale.y, 
+            sud.offset.z + Math.cos(t * 2 + sud.phase) * 4
+          );
+          s.material.opacity = Math.sin(sud.life * Math.PI) * 0.45;
+          s.scale.setScalar((8 + sud.life * 30) / m.scale.y);
+        });
       }
 
-      const smoke = vfx.children.find(c => c.name === 'vfx_smoke');
-      const sparks = vfx.children.find(c => c.name === 'vfx_sparks');
-      const fire  = vfx.children.find(c => c.name === 'vfx_fire');
-
-      // Calculate current building height for VFX positioning
-      const currentH = ud.baseH * m.scale.y;
-
-      // Nivel 1+: Smoke (Ratio >= 1.0)
-      smoke.children.forEach(s => {
-        const sud = s.userData;
-        sud.life = (sud.life + dt * 0.4) % 1.0;
-        const drift = sud.life * 60;
-        s.position.set(
-          sud.offset.x + Math.sin(t * 2 + sud.phase) * 4,
-          (currentH + drift) / m.scale.y, 
-          sud.offset.z + Math.cos(t * 2 + sud.phase) * 4
-        );
-        s.material.opacity = Math.sin(sud.life * Math.PI) * 0.45;
-        s.scale.setScalar((8 + sud.life * 30) / m.scale.y);
-      });
-
-      // Nivel 2+: Sparks & Flicker (Ratio >= 1.2 o Error)
-      if (ratio >= 1.2 || isError) {
-        sparks.visible = true;
+      // ── Level 2: Sparks & Pulse (Ratio >= 1.2) ────────
+      const showSparks = (ratio >= 1.2 || isError) && State.perfMode && State.showParticles;
+      sparks.visible = showSparks;
+      if (showSparks) {
         sparks.children.forEach(s => {
           const sud = s.userData;
           sud.age += dt * 2.5;
@@ -153,25 +148,23 @@ export class VFXManager {
              sud.vel.set((Math.random()-0.5)*120, 100 + Math.random()*150, (Math.random()-0.5)*120);
           }
           s.position.addScaledVector(sud.vel, dt / m.scale.y);
-          sud.vel.y -= 350 * dt; // Gravity
+          sud.vel.y -= 350 * dt;
           s.material.opacity = (1.0 - sud.age) * 0.9;
           s.scale.setScalar(2.0 * (1.0 - sud.age) / m.scale.y);
         });
-
-        // Glitch flicker
-        if (Math.random() > 0.88) {
-          m.material.forEach(mat => { mat.emissiveIntensity = 1.0 + Math.random() * 3.0; });
-        } else {
-          m.material.forEach(mat => { mat.emissiveIntensity += (1.0 - mat.emissiveIntensity) * 0.15; });
-        }
+        // Breathing pulse
+        const pulse = 0.5 + Math.sin(t * 4) * 0.5;
+        m.material.forEach(mat => {
+          mat.emissiveIntensity += ( (0.2 + pulse * 2.5) - mat.emissiveIntensity ) * 0.1;
+        });
       } else {
-        sparks.visible = false;
-        m.material.forEach(mat => { mat.emissiveIntensity += (0.2 - mat.emissiveIntensity) * 0.1; });
+        m.material.forEach(mat => { mat.emissiveIntensity += (0.15 - mat.emissiveIntensity) * 0.05; });
       }
 
-      // Nivel 3: Fire (Ratio >= 1.5 o Error)
-      if (ratio >= 1.5 || isError) {
-        fire.visible = true;
+      // ── Level 3: Fire (Ratio >= 1.5) ───────────────────
+      const showFire = (ratio >= 1.5 || isError) && State.perfMode && State.showParticles;
+      fire.visible = showFire;
+      if (showFire) {
         fire.children.forEach(f => {
           const fud = f.userData;
           const life = (t * fud.speed + fud.phase) % 1.0;
@@ -180,8 +173,6 @@ export class VFXManager {
           f.scale.setScalar(20 * age / m.scale.y);
           f.material.opacity = age * 0.9;
         });
-      } else {
-        fire.visible = false;
       }
     });
   }

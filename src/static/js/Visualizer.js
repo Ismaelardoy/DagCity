@@ -5,9 +5,9 @@
 import { State } from './State.js';
 
 // Exported references used by other modules
-export let scene, camera, renderer, controls;
+export let scene, camera, renderer, controls, composer, bloomPass;
 
-console.log('[Visualizer] Module loaded. Exports initialized as undefined.');
+console.log('[Visualizer] Module loaded.');
 export const INIT_CAM = { x: 0, y: 110, z: 280 };
 
 
@@ -77,10 +77,65 @@ export function initScene() {
     camera.aspect = nw / nh;
     camera.updateProjectionMatrix();
     renderer.setSize(nw, nh);
+    if (composer) composer.setSize(nw, nh);
   });
 
-  // Aztec background canvas animation
+  initPostProcessing();
+  initEngineListeners();
   _initAzBg();
+}
+
+function initPostProcessing() {
+  const W = window.innerWidth, H = window.innerHeight;
+  const renderScene = new THREE.RenderPass(scene, camera);
+  
+  bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(W, H), 1.5, 0.4, 0.85);
+  bloomPass.threshold = 0.22;
+  bloomPass.strength = State.neonIntensity;
+  bloomPass.radius = 0.5;
+
+  composer = new THREE.EffectComposer(renderer);
+  composer.addPass(renderScene);
+  composer.addPass(bloomPass);
+}
+
+function initEngineListeners() {
+  setTimeout(() => {
+    console.log('[Visualizer] Initializing engine listeners...');
+    
+    State.on('change:camSensitivity', val => {
+      if (!controls) return;
+      const sens = parseFloat(val);
+      controls.rotateSpeed = sens;
+      controls.zoomSpeed   = 1.2 * sens;
+      controls.panSpeed    = sens;
+      controls.update();
+    });
+
+    State.on('change:neonIntensity', val => {
+      if (bloomPass) bloomPass.strength = parseFloat(val);
+    });
+
+    State.on('change:showLabels', val => {
+      if (!scene) return;
+      console.log('[Visualizer] Toggling labels:', val);
+      scene.traverse(obj => {
+        if (obj.name === 'label' || obj.name === 'timeLabel' || (obj.name && obj.name.includes('Label'))) {
+          obj.visible = val;
+        }
+      });
+    });
+
+    // Apply initial values
+    if (controls) {
+      controls.rotateSpeed = State.camSensitivity;
+      controls.zoomSpeed   = 1.2 * State.camSensitivity;
+      controls.panSpeed    = State.camSensitivity;
+    }
+    if (bloomPass) bloomPass.strength = State.neonIntensity;
+    
+    console.log('[Visualizer] Listeners ready.');
+  }, 100);
 }
 
 function _initAzBg() {

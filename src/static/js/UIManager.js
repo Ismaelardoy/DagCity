@@ -7,12 +7,15 @@ import {
   applySelection, resetSelection, tweenCamera, updateFires, rebuildCity,
   makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics
 } from './CityEngine.js';
-import { controls, camera, INIT_CAM } from './Visualizer.js';
+import { controls, camera, INIT_CAM, composer } from './Visualizer.js';
 
 
 // ── Sidebar ────────────────────────────────────────────
 const sidebar   = document.getElementById('sidebar');
 const sbContent = document.getElementById('sb-content');
+
+let isSlaPanelOpen = false;
+let isSettingsOpen = false;
 
 export function openSidebar(n) {
   const cols      = n.columns || [];
@@ -85,12 +88,57 @@ export function closeSidebar() {
 
 
 // ── SLA Panel ──────────────────────────────────────────
-let isSlaPanelOpen = false;
-
 function toggleSlaPanel() {
+  if (isSettingsOpen) toggleSettingsPanel();
   isSlaPanelOpen = !isSlaPanelOpen;
   document.getElementById('sla-panel').classList.toggle('open', isSlaPanelOpen);
   document.getElementById('dock-sla').classList.toggle('active', isSlaPanelOpen);
+}
+
+// ── Settings Drawer ─────────────────────────────────────
+function toggleSettingsPanel() {
+  if (isSlaPanelOpen) toggleSlaPanel();
+  isSettingsOpen = !isSettingsOpen;
+  document.getElementById('settings-panel').classList.toggle('open', isSettingsOpen);
+  document.getElementById('dock-settings').classList.toggle('active', isSettingsOpen);
+}
+
+export function initSettings() {
+  document.getElementById('dock-settings').addEventListener('click', toggleSettingsPanel);
+  document.getElementById('settings-close').addEventListener('click', toggleSettingsPanel);
+
+  // Camera Sensitivity
+  const inputCam = document.getElementById('input-cam-sens');
+  const valCam   = document.getElementById('val-cam-sens');
+  const fillCam  = document.getElementById('fill-cam-sens');
+  inputCam.addEventListener('input', () => {
+    const val = inputCam.value / 100;
+    valCam.textContent = val.toFixed(1) + 'x';
+    fillCam.style.width = ((inputCam.value - 50) / 150 * 100) + '%';
+    State.set('camSensitivity', val);
+  });
+
+  // Neon Bloom
+  const inputBloom = document.getElementById('input-bloom');
+  const valBloom   = document.getElementById('val-bloom');
+  const fillBloom  = document.getElementById('fill-bloom');
+  inputBloom.addEventListener('input', () => {
+    const val = (inputBloom.value / 100);
+    valBloom.textContent = val.toFixed(1);
+    fillBloom.style.width = (inputBloom.value / 200 * 100) + '%';
+    State.set('neonIntensity', val);
+  });
+
+  // Visibility Toggles
+  const checkLabels = document.getElementById('check-labels');
+  checkLabels.addEventListener('change', () => {
+    State.set('showLabels', checkLabels.checked);
+  });
+
+  const checkVfx = document.getElementById('check-vfx');
+  checkVfx.addEventListener('change', () => {
+    State.set('showParticles', checkVfx.checked);
+  });
 }
 
 function handleManualSLAInput(el, onSync) {
@@ -422,6 +470,7 @@ export function initDock() {
   projectModal.addEventListener('click', e => { if (e.target === projectModal) projectModal.classList.remove('open'); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') projectModal.classList.remove('open'); });
   initStatusHUD();
+  initSettings();
 }
 
 async function initStatusHUD() {
@@ -527,8 +576,6 @@ export function initRaycaster(renderer, camera) {
       }
     } else {
       sidebar.classList.remove('open'); resetSelection();
-      tweenCamera(INIT_CAM, {x:0,y:0,z:0}, 1500);
-      // Removed forced autoRotate activation on background click.
     }
 
 

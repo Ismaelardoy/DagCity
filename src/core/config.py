@@ -42,5 +42,6 @@ def is_live_sync_available():
 
 # Ensure directories exist
 os.makedirs(VIZ_DIR, exist_ok=True)
+os.makedirs(os.path.join(VIZ_DIR, "static"), exist_ok=True)
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 
