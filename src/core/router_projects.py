@@ -4,7 +4,8 @@ import shutil
 from datetime import datetime
 from typing import List, Dict
 from fastapi import APIRouter, HTTPException, Request
-from core.config import PROJECTS_DIR, WORKSPACE_PATH
+from core.config import PROJECTS_DIR, WORKSPACE_PATH, EXTERNAL_MANIFEST_PATH, is_live_sync_available
+from core.parser import ManifestParser
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -36,6 +37,7 @@ async def list_projects():
             "name": name,
             "node_count": meta.get("node_count", 0),
             "created_at": meta.get("created_at", ""),
+            "source": meta.get("source", "offline")
         })
     return projects
 
@@ -45,8 +47,25 @@ async def get_project(name: str):
     graph_path = os.path.join(PROJECTS_DIR, name, "graph.json")
     if not os.path.exists(graph_path):
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
-    with open(graph_path) as f:
-        data = json.load(f)
+    # Bypass cache if it's the live project
+    meta_path = os.path.join(PROJECTS_DIR, name, "meta.json")
+    is_live = False
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            is_live = json.load(f).get("source") == "live_sync"
+            
+    if is_live and is_live_sync_available():
+        try:
+            parser = ManifestParser(EXTERNAL_MANIFEST_PATH)
+            data = parser.parse()
+        except Exception as e:
+            # Fallback to cached version if parsing fails
+            with open(graph_path) as f:
+                data = json.load(f)
+    else:
+        with open(graph_path) as f:
+            data = json.load(f)
+            
     # Attach saved SLA config if it exists
     sla_path = os.path.join(PROJECTS_DIR, name, "sla.json")
     if os.path.exists(sla_path):

@@ -428,6 +428,17 @@ export function rebuildCity(graphData, isLiveSync = false) {
   }
 
   // Full rebuild
+  if (!isLiveSync) {
+    tweenCamera(INIT_CAM, {x:0,y:0,z:0}, 1800);
+    controls.autoRotate = true;
+    const dockRotate = document.getElementById('dock-rotate');
+    if (dockRotate) {
+      dockRotate.classList.add('active');
+      const lbl = document.getElementById('label-rotate');
+      if (lbl) lbl.textContent = 'AUTO-ROTATE: ON';
+    }
+  }
+
   [...meshes].forEach(m => {
     scene.remove(m);
     if (m.geometry) m.geometry.dispose();
@@ -444,6 +455,9 @@ export function rebuildCity(graphData, isLiveSync = false) {
   });
   edgeObjs.length = 0;
   Object.keys(nodeMap).forEach(k => delete nodeMap[k]);
+  
+  // Preserve selection if possible
+  const prevSelectedId = selectedNode ? selectedNode.id : null;
   selectedNode = null; critSet = new Set();
 
   maxTime = nodes.length ? Math.max(...nodes.map(n => n.execution_time || 0)) : 0;
@@ -469,16 +483,15 @@ export function rebuildCity(graphData, isLiveSync = false) {
   buildStart = performance.now();
 
   const hasRealNew = graphData.metadata?.has_real_times || false;
-  document.getElementById('stats').innerHTML =
-    `NODES&nbsp;<span style="color:#fff">${nodes.length}</span><br>EDGES&nbsp;<span style="color:#fff">${links.length}</span><br>${hasRealNew?`<span style="color:var(--green)">✓ REAL TIMES</span>`:`<span style="color:var(--orange)">∼ SIMULATED</span>`}`;
+  const statsEl = document.getElementById('stats');
+  if (statsEl) {
+    statsEl.innerHTML = `NODES&nbsp;<span style="color:#fff">${nodes.length}</span><br>EDGES&nbsp;<span style="color:#fff">${links.length}</span><br>${hasRealNew?`<span style="color:var(--green)">✓ REAL TIMES</span>`:`<span style="color:var(--orange)">∼ SIMULATED</span>`}`;
+  }
 
-  tweenCamera(INIT_CAM, {x:0,y:0,z:0}, 1800);
-  controls.autoRotate = true;
-  const dockRotate = document.getElementById('dock-rotate');
-  if (dockRotate) {
-    dockRotate.classList.add('active');
-    const lbl = document.getElementById('label-rotate');
-    if (lbl) lbl.textContent = 'AUTO-ROTATE: ON';
+  // Restore selection
+  if (prevSelectedId && nodeMeshMap[prevSelectedId]) {
+    const newNode = nodeMap[prevSelectedId];
+    if (newNode) applySelection(newNode);
   }
 
   State.emit('city:rebuilt', graphData);

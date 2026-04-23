@@ -10,12 +10,13 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 # Local imports
-from core.config import MANIFEST_PATH, PORT, VIZ_DIR, PROJECTS_DIR, WORKSPACE_PATH
+from core.config import EXTERNAL_MANIFEST_PATH, PORT, VIZ_DIR, PROJECTS_DIR, WORKSPACE_PATH, is_live_sync_available
 from core.parser import ManifestParser
 from core.generator import VizGenerator
 from core.watcher import ManifestWatcher
 from core.router_projects import router as projects_router
 from core.streamer import router as streamer_router, watcher_instance
+
 
 def _get_workspace_active_project() -> Optional[str]:
     if os.path.exists(WORKSPACE_PATH):
@@ -43,11 +44,12 @@ watcher: Optional[ManifestWatcher] = None
 
 def _get_current_graph() -> Dict:
     """Helper to get the most recent graph data from disk."""
-    if not os.path.exists(MANIFEST_PATH):
+    if not os.path.exists(EXTERNAL_MANIFEST_PATH):
         return _build_empty_graph()
     try:
-        parser = ManifestParser(MANIFEST_PATH)
+        parser = ManifestParser(EXTERNAL_MANIFEST_PATH)
         return parser.parse()
+
     except Exception as e:
         print(f"[ERROR] Failed to parse manifest on the fly: {e}", file=sys.stderr)
         return _build_empty_graph()
@@ -77,8 +79,65 @@ def _autodiscover_project_name(manifest_dict: dict) -> str:
 
 # ── Core Routes ──────────────────────────────────────────────────────
 
+@app.get("/api/status")
+async def get_status():
+    """Reports the server status and Live Sync availability."""
+    return {
+        "version": "5.1",
+        "live_sync_available": is_live_sync_available(),
+        "external_path": EXTERNAL_MANIFEST_PATH if is_live_sync_available() else None,
+        "projects_count": len(os.listdir(PROJECTS_DIR)) if os.path.exists(PROJECTS_DIR) else 0
+    }
+
+@app.get("/api/check-local")
+async def check_local():
+    """One-Click Live Sync: checks if manifest.json is present at the mounted volume path."""
+    if is_live_sync_available():
+        return {"status": "ready", "path": EXTERNAL_MANIFEST_PATH}
+    return {"status": "missing", "path": EXTERNAL_MANIFEST_PATH}
+
+@app.post("/api/launch-local")
+async def launch_local():
+    """One-Click Live Sync: parses external manifest and PERSISTS it internally so SLAs/Configs work."""
+    if not is_live_sync_available():
+        raise HTTPException(status_code=404, detail="No manifest found at volume path")
+    try:
+        # 1. Parse from external volume
+        # Check for run_results.json in the same target folder
+        run_results_path = EXTERNAL_MANIFEST_PATH.replace("manifest.json", "run_results.json")
+        rr_dict = None
+        if os.path.exists(run_results_path):
+            with open(run_results_path) as f: rr_dict = json.load(f)
+        
+        with open(EXTERNAL_MANIFEST_PATH) as f: m_dict = json.load(f)
+        
+        parser = ManifestParser(EXTERNAL_MANIFEST_PATH)
+        graph_data = parser.parse()
+        
+        # 2. Auto-persist internally so we can save SLAs etc.
+        project_name = _autodiscover_project_name(m_dict)
+        project_dir = os.path.join(PROJECTS_DIR, project_name)
+        os.makedirs(project_dir, exist_ok=True)
+        
+        with open(os.path.join(project_dir, "graph.json"), "w") as f:
+            json.dump(graph_data, f)
+        with open(os.path.join(project_dir, "meta.json"), "w") as f:
+            json.dump({
+                "node_count": len(graph_data.get("nodes", [])),
+                "created_at": datetime.now().isoformat(),
+                "source": "live_sync"
+            }, f)
+            
+        _set_workspace_active_project(project_name)
+            
+        return {**graph_data, "project": project_name, "is_live": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
+
     index_path = os.path.join(VIZ_DIR, "index.html")
     if not os.path.exists(index_path):
         graph = _get_current_graph()
@@ -127,7 +186,11 @@ async def upload_data(request: Request):
     with open(os.path.join(project_dir, "graph.json"), "w") as f:
         json.dump(graph_data, f)
     
-    meta = {"node_count": len(graph_data.get("nodes", [])), "created_at": datetime.now().isoformat()}
+    meta = {
+        "node_count": len(graph_data.get("nodes", [])), 
+        "created_at": datetime.now().isoformat(),
+        "source": "offline"
+    }
     with open(os.path.join(project_dir, "meta.json"), "w") as f:
         json.dump(meta, f)
 
@@ -136,6 +199,7 @@ async def upload_data(request: Request):
     return {**graph_data, "saved": True, "project": project_name}
 
 # ── Startup & Static Assets ───────────────────────────────────────────
+BUILD_ID = datetime.now().strftime("%Y%m%d%H%M%S")
 
 # Sync static assets before mounting
 _STATIC_SRC = os.path.join(os.path.dirname(__file__), 'static')
@@ -172,16 +236,25 @@ async def startup_event():
         graph_data = _get_current_graph()
 
     viz_file = os.path.join(VIZ_DIR, "index.html")
-    viz.generate(graph_data, viz_file)
+    # Force regeneration on every boot
+    viz.generate(graph_data, viz_file, build_id=BUILD_ID)
     print(f"[+] Visualization ready at {viz_file}")
 
     loop = asyncio.get_running_loop()
-    # Initialize global watcher and share it with the streamer
-    watcher_obj = ManifestWatcher(PROJECTS_DIR, loop)
-    watcher_obj.start(recursive=True)
-    streamer.watcher_instance = watcher_obj
     
-    print(f"[+] Workspace Live Sync active. Watching {PROJECTS_DIR}")
+    # 3. Initialize Live Sync (Volume Watcher)
+    # We watch the entire /data directory to cover both internal projects and the mounted volume
+    watch_root = "/data" if os.path.exists("/data") else PROJECTS_DIR
+    
+    watcher_obj = ManifestWatcher(watch_root, loop)
+    watcher_obj.start(recursive=True)
+    
+    streamer.watcher_instance = watcher_obj
+    if is_live_sync_available():
+        print(f"[+] Live Sync ACTIVE. Watching external volume: {EXTERNAL_MANIFEST_PATH}")
+    else:
+        print(f"[+] Live Sync IDLE (No volume discovered). Watching internal store: {PROJECTS_DIR}")
+
 
 
 @app.on_event("shutdown")

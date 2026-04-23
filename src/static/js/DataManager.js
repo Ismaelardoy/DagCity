@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════════════════
 import { State } from './State.js';
 import { rebuildCity } from './CityEngine.js';
-import { loadSLAFromProject, renderZoneSliders, renderNodeOverrides } from './UIManager.js';
+import { loadSLAFromProject, renderZoneSliders, renderNodeOverrides, updateSyncHUD } from './UIManager.js';
 import { updateFires } from './CityEngine.js';
 
 // ── Drag & Drop upload ─────────────────────────────────
@@ -148,19 +148,39 @@ export async function autoRestoreProject() {
 }
 
 // ── Live Sync (SSE) ────────────────────────────────────
-export function initLiveSync() {
+let _evtSource = null;
+
+export async function initLiveSync() {
+  if (_evtSource) return; // Already connected
+
+  try {
+    const res = await fetch('/api/status');
+    const status = await res.json();
+    // We connect SSE regardless, as long as it's not already connected, 
+    // because it also handles internal project updates.
+  } catch(e) { return; }
+
   console.log('[📡] Workspace Live Sync: Initiating connection...');
-  const evtSource = new EventSource('/api/live-stream');
-  evtSource.onmessage = event => {
+  _evtSource = new EventSource('/api/live-stream');
+
+  _evtSource.onmessage = event => {
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === 'update') {
         const active = localStorage.getItem('dagcity_active_project');
-        if (msg.project === active) {
-          console.log(`[📡] Live update for active project: ${msg.project}`);
-          fetch(`/api/projects/${encodeURIComponent(msg.project)}`)
+        // If it's a specific project or the 'live' project signal
+        if (msg.project === active || msg.project === 'live') {
+          console.log(`[📡] Live update detected: ${msg.project}`);
+          
+          // If it's the live project, we use launch-local to re-sync
+          const url = (msg.project === 'live') ? '/api/launch-local' : `/api/projects/${encodeURIComponent(msg.project)}`;
+          
+          fetch(url, { method: (msg.project === 'live' ? 'POST' : 'GET') })
             .then(res => res.json())
-            .then(data => rebuildCity(data, true))
+            .then(data => {
+              console.log('[📡] Applying real-time update to 3D scene...');
+              rebuildCity(data, true);
+            })
             .catch(err => console.error('[📡] Live update fetch failed:', err));
         }
       } else {
@@ -168,8 +188,80 @@ export function initLiveSync() {
       }
     } catch(e) { console.warn('[📡] Live Sync parse error:', e); }
   };
-  evtSource.onerror = () => {
+  _evtSource.onerror = () => {
     console.warn('[📡] Live Sync connection lost. Retrying in 5s...');
-    evtSource.close(); setTimeout(initLiveSync, 5000);
+    _evtSource.close(); _evtSource = null; setTimeout(initLiveSync, 5000);
   };
+}
+
+// ── One-Click Live Connect ─────────────────────────────
+export async function connectLocal() {
+  const btn = document.getElementById('btn-connect-local');
+  const lpStatus = document.getElementById('lp-status');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+  if (lpStatus) lpStatus.textContent = 'SCANNING VOLUME…';
+
+  try {
+    const res = await fetch('/api/check-local');
+    const data = await res.json();
+
+    if (data.status === 'ready') {
+      if (lpStatus) lpStatus.textContent = '✓ LIVE MANIFEST DETECTED';
+      // Fetch and launch the city immediately
+      const graphRes = await fetch('/api/upload', { method: 'POST' }).catch(() => null);
+      // Assassin's Creed-style: parse the external manifest directly
+      const launchRes = await fetch('/api/launch-local', { method: 'POST' });
+      if (launchRes.ok) {
+        const cityData = await launchRes.json();
+        if (cityData.project) {
+          localStorage.setItem('dagcity_active_project', cityData.project);
+          localStorage.setItem('dagcity_is_live', 'true');
+        }
+        await _dzHideOverlay();
+        rebuildCity(cityData, false);
+        initLiveSync();
+        updateSyncHUD('live_sync');
+      } else {
+        throw new Error('Launch failed');
+      }
+    } else {
+      // Show missing–volume modal
+      document.getElementById('local-missing-modal').classList.add('open');
+      if (lpStatus) lpStatus.textContent = 'NO VOLUME DETECTED';
+    }
+  } catch(e) {
+    console.error('[🔗] connectLocal error:', e);
+    document.getElementById('local-missing-modal').classList.add('open');
+    if (lpStatus) lpStatus.textContent = 'CONNECTION FAILED';
+  } finally {
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+  }
+}
+
+export async function initLivePipelineStatus() {
+  const lpStatus = document.getElementById('lp-status');
+  if (!lpStatus) return;
+  try {
+    const res = await fetch('/api/check-local');
+    const data = await res.json();
+    if (data.status === 'ready') {
+      lpStatus.textContent = '✓ LIVE SYNC READY — CONNECTING…';
+      lpStatus.style.color = '#39ff14';
+      const btn = document.getElementById('btn-connect-local');
+      if (btn) { 
+        btn.style.boxShadow = '0 0 50px rgba(57,255,20,0.35)';
+        btn.style.borderColor = '#39ff14';
+      }
+      
+      // Zero-Friction: If it's ready on boot, connect automatically
+      console.log('[🔗] Auto-detecting live volume. Launching...');
+      connectLocal();
+    } else {
+      lpStatus.textContent = '❌ MANIFEST NOT FOUND — CLICK FOR HELP';
+      lpStatus.style.color = '#ff4444';
+      lpStatus.style.opacity = '1';
+    }
+  } catch(e) {
+    lpStatus.textContent = 'ENVIRONMENT CHECK FAILED';
+  }
 }

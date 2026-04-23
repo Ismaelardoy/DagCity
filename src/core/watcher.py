@@ -1,7 +1,7 @@
 import os
 import asyncio
 import time
-from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler
 from typing import Set, Callable
 
@@ -26,16 +26,28 @@ class ManifestEventHandler(FileSystemEventHandler):
             now = time.time()
             if now - self.last_triggered > self.debounce_seconds:
                 self.last_triggered = now
-                # Extract project name from path (assumes /data/projects/{name}/manifest.json)
-                parts = event_path.split(os.sep)
-                project_name = None
+                
+                # Check if it's the external manifest (Live Sync)
+                is_external = False
                 try:
-                    # Look for the part after 'projects'
-                    idx = parts.index("projects")
-                    if idx + 1 < len(parts):
-                        project_name = parts[idx+1]
-                except ValueError:
-                    pass
+                    if os.path.exists(self.manifest_path) and os.path.samefile(event_path, self.manifest_path):
+                        is_external = True
+                except: pass
+                
+                if is_external or event_path == self.manifest_path:
+                    project_name = "live"
+                else:
+                    # Extract project name from path (assumes /data/projects/{name}/manifest.json)
+                    parts = event_path.split(os.sep)
+                    project_name = None
+                    try:
+                        # Look for the part after 'projects'
+                        idx = parts.index("projects")
+                        if idx + 1 < len(parts):
+                            project_name = parts[idx+1]
+                    except ValueError:
+                        # Fallback: if it's just /data/manifest.json or similar
+                        project_name = "live"
 
                 print(f"[WATCHER] Change detected in {event_path} (Project: {project_name})")
                 self.on_change_callback(project_name)
@@ -52,14 +64,19 @@ class ManifestWatcher:
         self.observer = None
         
         # Determine directory to watch
-        self.watch_dir = os.path.dirname(os.path.abspath(manifest_path))
+        full_path = os.path.abspath(manifest_path)
+        if os.path.isdir(full_path):
+            self.watch_dir = full_path
+        else:
+            self.watch_dir = os.path.dirname(full_path)
+            
         if not os.path.exists(self.watch_dir):
             os.makedirs(self.watch_dir, exist_ok=True)
 
     def start(self, recursive: bool = False):
         print(f"[*] Starting Watchdog on: {self.watch_dir} (Recursive: {recursive})...")
         handler = ManifestEventHandler(self.manifest_path, self._trigger_event)
-        self.observer = Observer()
+        self.observer = PollingObserver(timeout=1.0)
         self.observer.schedule(handler, self.watch_dir, recursive=recursive)
         self.observer.start()
 

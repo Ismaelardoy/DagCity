@@ -13,7 +13,7 @@ import {
   initDock, initRaycaster, initSLA, initHUD,
   renderZoneSliders, renderNodeOverrides, loadSLAFromProject
 } from './UIManager.js';
-import { initLiveSync, autoRestoreProject } from './DataManager.js';
+import { initLiveSync, autoRestoreProject, connectLocal, initLivePipelineStatus } from './DataManager.js';
 
 // ── 1. Initialise Three.js scene ──────────────────────
 Visualizer.initScene();
@@ -23,6 +23,9 @@ initDock();
 initRaycaster(Visualizer.renderer, Visualizer.camera);
 initSLA();
 initHUD(Visualizer.renderer);
+
+// Expose Hub functions globally (called from HTML onclick)
+window.connectLocal = connectLocal;
 
 
 // ── 3. Load initial data from server injection ────────
@@ -34,6 +37,8 @@ const AWAITING_DATA = RAW.status === 'awaiting_upload';
 if (AWAITING_DATA) {
   const overlay = document.getElementById('awaiting-overlay');
   if (overlay) overlay.style.display = 'flex';
+  // Probe the environment and update the Live Pipeline panel
+  initLivePipelineStatus();
 } else {
   // Position nodes by layer
   const lCnt = {}, lIdx = {};
@@ -72,4 +77,5 @@ if (AWAITING_DATA) {
   autoRestoreProject();
 }
 
-console.log('[DagCity] v5.0 — Modular Engine Ready 🚀');
+console.log('[DagCity] v5.1 — One-Click Live Sync Ready 🚀');
+

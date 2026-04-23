@@ -7,7 +7,7 @@ import {
   applySelection, resetSelection, tweenCamera, updateFires, rebuildCity,
   makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics
 } from './CityEngine.js';
-import { controls, INIT_CAM } from './Visualizer.js';
+import { controls, camera, INIT_CAM } from './Visualizer.js';
 
 
 // ── Sidebar ────────────────────────────────────────────
@@ -249,8 +249,18 @@ async function openProjectModal() {
   try {
     const res = await fetch('/api/projects');
     const projects = await res.json();
+    
+    // Check for "Live" project availability
+    const statusRes = await fetch('/api/status');
+    const status = await statusRes.json();
+    if (status.live_sync_available) {
+      // Add a special entry for the Live project if we want, 
+      // but for now the HUD indicator is enough.
+    }
+    
     renderProjects(projects);
   } catch(e) {
+
     pmList.innerHTML = '<div id="pm-empty">ERROR LOADING PROJECTS</div>';
   }
 }
@@ -265,16 +275,30 @@ function renderProjects(projects) {
   projects.forEach(p => {
     const isActive = p.name === active;
     const date = p.created_at ? new Date(p.created_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Unknown date';
+    const isLive = p.source === 'local_sync' || p.source === 'live_sync';
+    
     const row = document.createElement('div');
-    row.className = 'pm-project-row';
+    row.className = `pm-project-row ${isActive ? 'active' : ''}`;
+    
     row.innerHTML = `
       <div class="pm-project-info">
-        <div class="pm-project-name" id="pm-name-display-${p.name}">${p.name}${isActive ? ' <span style="color:var(--green);font-size:10px;letter-spacing:2px;">[ACTIVE]</span>' : ''}</div>
-        <div class="pm-project-meta">${p.node_count} BUILDINGS &nbsp;·&nbsp; ${date}</div>
+        <div class="pm-project-name" id="pm-name-display-${p.name}">
+          ${p.name}
+          ${isLive ? `
+            <div class="pm-badge pm-badge-live">
+              <span class="pm-dot pm-dot-live"></span> LIVE SYNC
+            </div>
+          ` : `
+            <div class="pm-badge pm-badge-static">SNAPSHOT</div>
+          `}
+        </div>
+        <div class="pm-project-meta">
+          ${isLive ? '⚡' : '📁'} ${p.node_count} BUILDINGS &nbsp;·&nbsp; ${date}
+        </div>
       </div>
       <div class="pm-project-actions">
         <button class="pm-btn pm-btn-load" onclick="window._loadProject('${p.name}')">LOAD</button>
-        <button class="pm-btn pm-btn-rename" onclick="window._startRename('${p.name}')">RENAME</button>
+        <button class="pm-btn pm-btn-rename" style="opacity:0.4;" onclick="window._startRename('${p.name}')">RENAME</button>
         <button class="pm-btn pm-btn-delete" onclick="window._deleteProject('${p.name}')">DELETE</button>
       </div>`;
     pmList.appendChild(row);
@@ -293,6 +317,11 @@ async function loadProject(name) {
     const overlay = document.getElementById('awaiting-overlay');
     if (overlay.style.display !== 'none') await window._dzHideOverlay();
     rebuildCity(data, false);
+    
+    // Update HUD Sync Status
+    const source = data.metadata?.source || (data.saved ? 'offline' : 'live_sync');
+    updateSyncHUD(source);
+
     loadSLAFromProject(data);
     renderZoneSliders();
     renderNodeOverrides();
@@ -392,7 +421,27 @@ export function initDock() {
   document.getElementById('pm-new-project').addEventListener('click', startNewProject);
   projectModal.addEventListener('click', e => { if (e.target === projectModal) projectModal.classList.remove('open'); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') projectModal.classList.remove('open'); });
+  initStatusHUD();
 }
+
+async function initStatusHUD() {
+  try {
+    const res = await fetch('/api/status');
+    const status = await res.json();
+    const hud = document.getElementById('live-sync-hud');
+    if (!hud) return;
+    if (status.live_sync_available) {
+      hud.innerHTML = '<span class="status-dot green"></span> LIVE SYNC ACTIVE';
+      hud.title = `Watching: ${status.external_path}`;
+      hud.classList.add('active');
+    } else {
+      hud.innerHTML = '<span class="status-dot grey"></span> LIVE SYNC OFF';
+      hud.title = "Mount your dbt project folder to /data to enable real-time updates.";
+      hud.classList.remove('active');
+    }
+  } catch(e) {}
+}
+
 
 function startNewProject() {
   projectModal.classList.remove('open');
@@ -523,6 +572,22 @@ export function initSLA() {
 }
 
 // ── HUD Logic ─────────────────────────────────────────
+export function updateSyncHUD(source) {
+  const dot = document.getElementById('sync-hud-dot');
+  const text = document.getElementById('sync-hud-text');
+  if (!dot || !text) return;
+
+  if (source === 'live_sync' || source === 'local_sync') {
+    dot.className = 'status-dot green';
+    text.textContent = 'LIVE SYNC';
+    text.style.color = '#39ff14';
+  } else {
+    dot.className = 'status-dot orange';
+    text.textContent = 'OFFLINE';
+    text.style.color = '#ffaa00';
+  }
+}
+
 export function initHUD(renderer) {
   const smartHUD   = document.getElementById('smart-hud');
   const helpTrigger = document.getElementById('help-trigger-left');

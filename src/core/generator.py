@@ -234,40 +234,56 @@ input[type=range].sla-input::-webkit-slider-thumb {
 #pm-body::-webkit-scrollbar-thumb { background: rgba(0,242,255,0.2); border-radius: 3px; }
 #pm-empty { color: rgba(255,255,255,0.3); text-align: center; padding: 50px 0; letter-spacing: 3px; font-size: 13px; }
 .pm-project-row {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 16px; border-radius: 10px; margin-bottom: 8px;
-  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
-  transition: all 0.2s; cursor: default;
+  background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 12px; padding: 20px 22px; margin-bottom: 12px;
+  display: flex; align-items: center; justify-content: space-between;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.pm-project-row:hover { background: rgba(0,242,255,0.05); border-color: rgba(0,242,255,0.15); }
+.pm-project-row:hover { background: rgba(255,255,255,0.04); border-color: rgba(0,242,255,0.2); }
+.pm-project-row.active {
+  border-color: #00f2ff; background: rgba(0,242,255,0.03);
+  box-shadow: 0 0 30px rgba(0,242,255,0.1), inset 0 0 15px rgba(0,242,255,0.05);
+}
 .pm-project-info { flex: 1; min-width: 0; }
-.pm-project-name {
-  font-size: 15px; color: #fff; font-weight: bold; letter-spacing: 1px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.pm-project-name { 
+  font-size: 1.05rem; font-weight: 700; color: rgba(255,255,255,0.7); 
+  margin-bottom: 6px; display: flex; align-items: center; gap: 12px;
+  letter-spacing: 1px;
 }
-.pm-project-name input {
-  background: transparent; border: none; border-bottom: 1px solid var(--cyan);
-  color: var(--cyan); font-size: 15px; font-weight: bold; letter-spacing: 1px;
-  outline: none; width: 100%;
+.pm-project-row.active .pm-project-name { color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.3); }
+
+/* Badges */
+.pm-badge {
+  font-size: 8px; font-weight: 900; letter-spacing: 1.5px;
+  padding: 3px 8px; border-radius: 4px; text-transform: uppercase;
+  display: flex; align-items: center; gap: 5px;
 }
-.pm-project-meta { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 4px; letter-spacing: 1px; }
-.pm-project-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.pm-badge-live { background: rgba(57,255,20,0.1); border: 1px solid rgba(57,255,20,0.3); color: #39ff14; }
+.pm-badge-static { background: rgba(0,242,255,0.08); border: 1px solid rgba(0,242,255,0.2); color: rgba(0,242,255,0.6); }
+
+.pm-dot { width: 6px; height: 6px; border-radius: 50%; }
+.pm-dot-live { background: #39ff14; box-shadow: 0 0 8px #39ff14; animation: pm-pulse 1.5s infinite; }
+
+@keyframes pm-pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.5; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.pm-project-meta { font-size: 0.72rem; color: rgba(255,255,255,0.25); letter-spacing: 1px; display: flex; align-items: center; gap: 8px; }
+.pm-project-actions { display: flex; gap: 10px; flex-shrink: 0; }
+
 .pm-btn {
-  font-size: 11px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
-  letter-spacing: 1.5px; font-weight: bold; border: 1px solid; transition: all 0.15s;
-  font-family: 'Courier New', monospace;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
+  color: #fff; padding: 8px 18px; border-radius: 6px; cursor: pointer;
+  font-size: 11px; font-weight: 900; letter-spacing: 2px; transition: all 0.2s;
+  font-family: 'JetBrains Mono', monospace;
 }
-.pm-btn-new {
-  border-color: var(--green); color: var(--green); background: rgba(0,255,102,0.05);
-  margin-right: 12px; font-size: 11px;
-}
-.pm-btn-new:hover { background: rgba(0,255,102,0.15); box-shadow: 0 0 15px rgba(0,255,102,0.25); }
-.pm-btn-load { border-color: var(--cyan); color: var(--cyan); background: transparent; }
-.pm-btn-load:hover { background: rgba(0,242,255,0.12); box-shadow: 0 0 10px rgba(0,242,255,0.2); }
-.pm-btn-rename { border-color: rgba(255,255,255,0.25); color: rgba(255,255,255,0.5); background: transparent; }
-.pm-btn-rename:hover { border-color: var(--magenta); color: var(--magenta); }
-.pm-btn-delete { border-color: rgba(255,0,0,0.3); color: rgba(255,80,80,0.8); background: transparent; }
-.pm-btn-delete:hover { background: rgba(255,0,0,0.1); border-color: rgba(255,50,50,0.6); }
+.pm-btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.3); }
+.pm-btn-load { border-color: var(--cyan); color: var(--cyan); }
+.pm-btn-load:hover { background: rgba(0,242,255,0.1); box-shadow: 0 0 15px rgba(0,242,255,0.3); }
+.pm-btn-delete { border-color: rgba(255,0,0,0.2); color: rgba(255,0,0,0.4); }
+.pm-btn-delete:hover { border-color: var(--red); color: var(--red); background: rgba(255,0,0,0.1); }
 
 /* ── LEGEND ── */
 #legend {
@@ -393,9 +409,18 @@ input[type=range].sla-input::-webkit-slider-thumb {
   display: flex; align-items: center; gap: 10px;
   font-family: 'JetBrains Mono', 'Courier New', monospace;
   font-size: 12px; color: #fff; letter-spacing: 1.5px; white-space: nowrap;
+  pointer-events: auto; cursor: default;
 }
+.hud-item#live-sync-hud { gap: 8px; font-weight: 900; }
+.hud-item#live-sync-hud .status-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+  box-shadow: 0 0 10px rgba(255,255,255,0.2);
+}
+.hud-item#live-sync-hud .status-dot.green { background: #39ff14; box-shadow: 0 0 12px #39ff14; }
+.hud-item#live-sync-hud .status-dot.grey { background: #555; }
 .hud-icon { font-size: 16px; opacity: 0.9; }
 .hud-label { color: var(--cyan); font-weight: bold; }
+
 
 #help-trigger-left {
   position: fixed; bottom: 320px; left: 72px; z-index: 250;
@@ -430,15 +455,17 @@ input[type=range].sla-input::-webkit-slider-thumb {
 }
 #help-hint.fade-out { opacity: 0; visibility: hidden; }
 
-/* Awaiting overlay styles */
+/* Awaiting overlay — HUB layout */
 #awaiting-overlay {
   position: fixed; inset: 0; z-index: 999;
-  background: rgba(0, 0, 8, 0.92);
-  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-  flex-direction: column; align-items: center; justify-content: center;
+  background: rgba(0, 0, 8, 0.95);
+  backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
   font-family: 'Courier New', monospace; text-align: center;
   transition: opacity 0.6s ease, transform 0.6s ease;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 #dz-cancel {
   position: absolute; top: 30px; right: 40px;
@@ -452,40 +479,75 @@ input[type=range].sla-input::-webkit-slider-thumb {
 #awaiting-overlay.hiding {
   opacity: 0 !important; transform: scale(1.04); pointer-events: none;
 }
+
+/* Hub: logo + two-column grid */
 .az-inner {
   position: relative; z-index: 2;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  padding: 32px 16px;
+  display: flex; flex-direction: column; align-items: center; padding: 24px 16px;
+  width: 100%; max-width: 1100px;
 }
-.az-logo { display:flex; align-items:center; gap:16px; margin-bottom:36px; }
+.az-logo { display:flex; align-items:center; gap:16px; margin-bottom: 32px; }
 .az-logo-glyph {
-  font-size:40px; color:#ff00ff;
+  font-size:36px; color:#ff00ff;
   text-shadow: 0 0 18px #ff00ff, 0 0 40px #ff00ff44;
   animation: glyph-spin 8s linear infinite;
 }
 @keyframes glyph-spin {
   0% { transform: rotate(0deg) scale(1); } 50% { transform: rotate(180deg) scale(1.15); } 100% { transform: rotate(360deg) scale(1); }
 }
-.az-logo-text { font-size: 2.4rem; font-weight:900; letter-spacing:10px; color:#ff00ff; text-shadow: 0 0 20px #ff00ff, 0 0 60px #ff00ff44; }
-.az-headline {
-  font-size: clamp(1.6rem, 4vw, 2.8rem); font-weight:900;
-  letter-spacing: 8px; color:#00f3ff;
-  text-shadow: 0 0 25px #00f3ff, 0 0 60px #00f3ff33;
-  margin-bottom: 14px; text-transform: uppercase;
+.az-logo-text { font-size: 2.2rem; font-weight:900; letter-spacing:10px; color:#ff00ff; text-shadow: 0 0 20px #ff00ff, 0 0 60px #ff00ff44; }
+
+/* Two-column hub */
+.hub-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0;
+  align-items: stretch;
+  width: 100%;
+  max-width: 1040px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 24px;
+  overflow: hidden;
+  min-height: 400px;
 }
-.az-sub { font-size: 0.95rem; color: #ffffff66; letter-spacing: 2px; line-height: 1.7; max-width: 520px; margin-bottom: 40px; }
-.az-file-tag {
-  color: #00f3ff; background: rgba(0,243,255,0.1);
-  border: 1px solid rgba(0,243,255,0.3); border-radius: 4px; padding: 1px 8px; font-size: 0.85em;
+.hub-divider {
+  width: 1px; background: rgba(255,255,255,0.08);
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
 }
+.hub-divider::after {
+  content: 'OR';
+  background: #000814; color: rgba(255,255,255,0.2);
+  font-size: 11px; letter-spacing: 3px; padding: 8px 6px;
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
+}
+
+/* Left: Quick View panel */
+.hub-panel-left {
+  padding: 36px 32px;
+  display: flex; flex-direction: column; align-items: center;
+}
+.hub-panel-header {
+  font-size: 11px; letter-spacing: 5px; color: rgba(255,255,255,0.35);
+  margin-bottom: 20px; text-transform: uppercase;
+}
+
+/* Right: Live Pipeline panel */
+.hub-panel-right {
+  padding: 36px 32px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: rgba(57,255,20,0.015);
+}
+
 #drop-zone {
-  width: min(520px, 88vw); padding: 40px 28px;
-  border: 2px dashed rgba(0,243,255,0.35); border-radius: 20px;
+  width: 100%; padding: 28px 20px;
+  border: 2px dashed rgba(0,243,255,0.35); border-radius: 16px;
   background: rgba(0,243,255,0.03); cursor: pointer;
   transition: all 0.25s cubic-bezier(.22,1,.36,1); position: relative; overflow: hidden;
 }
 #drop-zone::before {
-  content: ''; position: absolute; inset: 0; border-radius: 18px;
+  content: ''; position: absolute; inset: 0; border-radius: 14px;
   background: radial-gradient(ellipse at 50% 0%, rgba(0,243,255,0.07) 0%, transparent 70%); pointer-events: none;
 }
 #drop-zone.dz-hover {
@@ -495,22 +557,22 @@ input[type=range].sla-input::-webkit-slider-thumb {
 .dz-icon-idle svg { filter: drop-shadow(0 0 8px #00f3ff88); animation: float-icon 3s ease-in-out infinite; }
 @keyframes float-icon { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
 .dz-icon-hover svg { animation: none; filter: drop-shadow(0 0 20px #00f3ff) drop-shadow(0 0 40px #00f3ff66); }
-.dz-title { font-size: 1.3rem; font-weight:900; letter-spacing:5px; color:#00f3ff; margin: 16px 0 8px; }
-.dz-text { font-size:0.85rem; color:#ffffff55; line-height:1.8; }
+.dz-title { font-size: 1.1rem; font-weight:900; letter-spacing:4px; color:#00f3ff; margin: 12px 0 6px; }
+.dz-text { font-size:0.8rem; color:#ffffff55; line-height:1.8; }
 .dz-slot {
   display:flex; align-items:center; gap:8px;
   background: rgba(255,255,255,0.04); border: 1px solid rgba(0,243,255,0.2);
-  border-radius: 10px; padding: 10px 18px; font-size:0.8rem;
-  color:#ffffff88; transition: all 0.3s; min-width: 170px; justify-content: center;
+  border-radius: 10px; padding: 8px 14px; font-size:0.78rem;
+  color:#ffffff88; transition: all 0.3s; min-width: 150px; justify-content: center;
 }
 .dz-slot.dz-slot-optional { border-color: rgba(255,0,255,0.2); }
 .dz-slot.dz-slot-loaded { border-color: #39ff14; color: #39ff14; background: rgba(57,255,20,0.07); box-shadow: 0 0 14px rgba(57,255,20,0.2); }
-.dz-slot-icon { font-size:1.1rem; }
-.dz-slot-check { color:#39ff14; font-size:1rem; font-weight:bold; }
+.dz-slot-icon { font-size:1rem; }
+.dz-slot-check { color:#39ff14; font-size:0.9rem; font-weight:bold; }
 .az-btn {
-  margin-top: 32px; background: rgba(0,243,255,0.08); border: 1.5px solid rgba(0,243,255,0.4);
-  color: #00f3ff; font-family: 'Courier New', monospace; font-size: 1.1rem; font-weight: 900;
-  letter-spacing: 4px; padding: 16px 48px; border-radius: 12px; cursor: pointer;
+  margin-top: 22px; background: rgba(0,243,255,0.08); border: 1.5px solid rgba(0,243,255,0.4);
+  color: #00f3ff; font-family: 'Courier New', monospace; font-size: 1rem; font-weight: 900;
+  letter-spacing: 4px; padding: 14px 36px; border-radius: 12px; cursor: pointer;
   transition: all 0.25s; text-transform: uppercase; box-shadow: 0 0 20px rgba(0,243,255,0.1);
 }
 .az-btn:hover:not(:disabled) { background: rgba(0,243,255,0.18); box-shadow: 0 0 45px rgba(0,243,255,0.4); transform: translateY(-2px); }
@@ -521,7 +583,7 @@ input[type=range].sla-input::-webkit-slider-thumb {
 }
 @keyframes btn-pulse { 0%,100% { box-shadow: 0 0 20px rgba(255,0,255,0.3); } 50% { box-shadow: 0 0 60px rgba(255,0,255,0.6), 0 0 100px rgba(255,0,255,0.2); } }
 .az-btn.ready:hover { background: rgba(255,0,255,0.2); transform: translateY(-2px); }
-.az-status { margin-top: 18px; font-size: 0.88rem; color: #39ff14; min-height: 22px; letter-spacing: 2px; }
+.az-status { margin-top: 14px; font-size: 0.82rem; color: #39ff14; min-height: 20px; letter-spacing: 2px; }
 .az-loader-track { width: 100%; height: 4px; background: rgba(0,243,255,0.1); border-radius: 2px; overflow: hidden; }
 .az-loader-bar {
   height: 100%; background: linear-gradient(90deg, #00f3ff, #ff00ff); border-radius: 2px; width: 0%;
@@ -530,12 +592,118 @@ input[type=range].sla-input::-webkit-slider-thumb {
 @keyframes loader-scan { 0% { width: 0%; margin-left: 0; } 50% { width: 75%; margin-left: 0; } 100% { width: 0%; margin-left: 100%; } }
 .az-loader-label { margin-top: 10px; font-size: 0.78rem; letter-spacing: 3px; color: #00f3ff88; text-align: center; }
 
+/* Live Pipeline Buttons */
+.lp-btn {
+  width: 280px; padding: 20px 24px;
+  border-radius: 16px; border: 1px solid;
+  font-family: 'Courier New', monospace;
+  cursor: pointer; transition: all 0.3s;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  text-align: left; margin-bottom: 16px;
+  position: relative; overflow: hidden;
+}
+.lp-btn::before {
+  content: ''; position: absolute; inset: 0;
+  background: currentColor; opacity: 0; transition: opacity 0.3s;
+}
+.lp-btn:hover::before { opacity: 0.06; }
+.lp-btn-local {
+  background: rgba(57,255,20,0.05);
+  border-color: rgba(57,255,20,0.4);
+  color: #39ff14;
+  box-shadow: 0 0 24px rgba(57,255,20,0.1);
+}
+.lp-btn-local:hover {
+  border-color: #39ff14;
+  box-shadow: 0 0 50px rgba(57,255,20,0.3), 0 0 100px rgba(57,255,20,0.1);
+  transform: translateY(-2px);
+}
+.lp-btn-cloud {
+  background: rgba(255,255,255,0.02);
+  border-color: rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.2);
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+.lp-btn-title {
+  font-size: 1rem; font-weight: 900; letter-spacing: 3px; text-transform: uppercase;
+}
+.lp-btn-sub {
+  font-size: 0.72rem; opacity: 0.7; letter-spacing: 1.5px; text-transform: uppercase;
+}
+.lp-badge {
+  position: absolute; top: 12px; right: 12px;
+  font-size: 9px; letter-spacing: 2px; padding: 3px 8px;
+  border-radius: 4px; text-transform: uppercase; font-weight: 900;
+}
+.lp-badge-live { background: rgba(57,255,20,0.15); color: #39ff14; border: 1px solid rgba(57,255,20,0.3); }
+.lp-badge-soon { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.1); }
+
+/* Missing volume modal */
+#local-missing-modal {
+  display: none; position: fixed; inset: 0; z-index: 1100;
+  background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);
+  align-items: center; justify-content: center;
+}
+#local-missing-modal.open { display: flex; }
+.lm-card {
+  background: #010a18; border: 1px solid rgba(57,255,20,0.3);
+  border-radius: 20px; padding: 40px 48px; max-width: 580px; width: 90%;
+  box-shadow: 0 0 80px rgba(0,0,0,0.8), 0 0 40px rgba(57,255,20,0.05);
+  text-align: left;
+}
+.lm-title { font-size: 1.4rem; font-weight: 900; letter-spacing: 5px; color: #ff6600; margin-bottom: 20px; }
+.lm-body { font-size: 1.5rem; color: rgba(255,255,255,0.9); line-height: 1.5; letter-spacing: 0.5px; margin-bottom: 30px; }
+.lm-code-container { position: relative; margin-bottom: 24px; }
+.lm-code {
+  background: rgba(0,0,0,0.8); border: 1px solid rgba(57,255,20,0.2);
+  border-radius: 12px; padding: 26px; font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 0.95rem; color: #39ff14; letter-spacing: 0.5px;
+  white-space: pre-wrap; word-break: break-all; min-height: 100px;
+  box-shadow: inset 0 0 30px rgba(0,0,0,0.7);
+}
+.lm-copy-btn {
+  position: absolute; top: 12px; right: 12px;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.5); padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  font-size: 11px; display: flex; align-items: center; gap: 8px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); backdrop-filter: blur(4px);
+}
+.lm-copy-btn:hover { background: rgba(57,255,20,0.1); border-color: rgba(57,255,20,0.4); color: #39ff14; }
+.lm-copy-btn.copied { background: #39ff14; color: #000; border-color: #39ff14; box-shadow: 0 0 15px rgba(57,255,20,0.4); }
+.lm-close {
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15);
+  color: #fff; padding: 14px 60px; border-radius: 10px; cursor: pointer;
+  font-size: 0.9rem; font-weight: 700; letter-spacing: 3px; transition: all 0.3s;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+}
+.lm-close:hover {
+  background: rgba(0,255,255,0.1); border-color: #00ffff; color: #00ffff;
+  box-shadow: 0 0 20px rgba(0,255,255,0.3), inset 0 0 10px rgba(0,255,255,0.2);
+  transform: translateY(-2px);
+}
+
   /* Global Error Overlay */
   #js-error-overlay {
     display: none; position: fixed; top: 20px; left: 20px; right: 20px;
     background: rgba(255, 0, 0, 0.9); color: white; padding: 20px;
     border-radius: 12px; z-index: 10000; font-family: 'JetBrains Mono', monospace;
     box-shadow: 0 0 30px rgba(255, 0, 0, 0.5); border: 2px solid white;
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px;
+    background: #666; transition: all 0.3s;
+  }
+  .status-dot.green { 
+    background: #39ff14; 
+    box-shadow: 0 0 10px #39ff14; 
+    animation: pulse-green 2s infinite; 
+  }
+  .status-dot.orange { background: #ffaa00; box-shadow: 0 0 10px #ffaa00; }
+  @keyframes pulse-green {
+    0% { box-shadow: 0 0 0 0 rgba(57,255,20, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(57,255,20, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(57,255,20, 0); }
   }
 </style>
 
@@ -555,52 +723,137 @@ input[type=range].sla-input::-webkit-slider-thumb {
 <div id="js-error-overlay"></div>
 <div id="canvas-container"></div>
 <div id="header">DAG_CITY</div>
-<div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V5.0</div>
+<div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V5.1</div>
 
-<!-- AWAITING DATA OVERLAY -->
+<!-- AWAITING DATA OVERLAY / HUB -->
 <div id="awaiting-overlay" style="display:none;">
   <button id="dz-cancel" title="Back to City">✕</button>
-  <canvas id="az-bg" style="position:absolute;inset:0;width:100%;height:100%;opacity:0.18;"></canvas>
+  <canvas id="az-bg" style="position:absolute;inset:0;width:100%;height:100%;opacity:0.12;"></canvas>
   <div class="az-inner">
+    <!-- Logo -->
     <div class="az-logo">
       <div class="az-logo-glyph">&#9670;</div>
       <div class="az-logo-text">DAG_CITY</div>
     </div>
-    <div class="az-headline">INITIALIZE METROPOLIS</div>
-    <div class="az-sub">Drop your dbt <span class="az-file-tag">manifest.json</span> and optional <span class="az-file-tag">run_results.json</span> here to build your city.</div>
-    <div id="drop-zone" ondragover="dzDragOver(event);" ondragleave="dzDragLeave(event);" ondrop="dzDrop(event);" onclick="document.getElementById('manifest-upload').click();">
-      <div id="dz-icon" class="dz-icon-idle">
-        <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
-          <path d="M28 6v30M16 20l12-14 12 14" stroke="#00f3ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-          <rect x="8" y="38" width="40" height="12" rx="4" stroke="#00f3ff" stroke-width="2" fill="none"/>
-          <circle cx="15" cy="44" r="2" fill="#00f3ff"/>
-          <circle cx="41" cy="44" r="2" fill="#ff00ff"/>
-        </svg>
-      </div>
-      <div id="dz-title" class="dz-title">DRAG &amp; DROP FILES</div>
-      <div id="dz-sub" class="dz-text">manifest.json &nbsp;+&nbsp; run_results.json (optional)<br><span style="font-size:0.75rem;opacity:0.5;">or click to browse</span></div>
-      <div id="dz-slots" style="margin-top:20px;display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
-        <div id="slot-manifest" class="dz-slot" title="manifest.json">
-          <span class="dz-slot-icon">&#128196;</span>
-          <span id="slot-manifest-name">manifest.json</span>
-          <span id="slot-manifest-check" class="dz-slot-check" style="display:none;">&#10003;</span>
+
+    <!-- Two-column Hub Grid -->
+    <div class="hub-grid">
+
+      <!-- LEFT: Quick View -->
+      <div class="hub-panel-left">
+        <div class="hub-panel-header">⚡ Quick View</div>
+        <div id="drop-zone" ondragover="dzDragOver(event);" ondragleave="dzDragLeave(event);" ondrop="dzDrop(event);" onclick="document.getElementById('manifest-upload').click();">
+          <div id="dz-icon" class="dz-icon-idle">
+            <svg width="48" height="48" viewBox="0 0 56 56" fill="none">
+              <path d="M28 6v30M16 20l12-14 12 14" stroke="#00f3ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+              <rect x="8" y="38" width="40" height="12" rx="4" stroke="#00f3ff" stroke-width="2" fill="none"/>
+              <circle cx="15" cy="44" r="2" fill="#00f3ff"/>
+              <circle cx="41" cy="44" r="2" fill="#ff00ff"/>
+            </svg>
+          </div>
+          <div id="dz-title" class="dz-title">DRAG &amp; DROP FILES</div>
+          <div id="dz-sub" class="dz-text">manifest.json &nbsp;+&nbsp; run_results.json (optional)<br><span style="font-size:0.72rem;opacity:0.5;">or click to browse</span></div>
+          <div id="dz-slots" style="margin-top:16px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+            <div id="slot-manifest" class="dz-slot" title="manifest.json">
+              <span class="dz-slot-icon">&#128196;</span>
+              <span id="slot-manifest-name">manifest.json</span>
+              <span id="slot-manifest-check" class="dz-slot-check" style="display:none;">&#10003;</span>
+            </div>
+            <div id="slot-results" class="dz-slot dz-slot-optional" title="run_results.json (optional)">
+              <span class="dz-slot-icon">&#9201;</span>
+              <span id="slot-results-name">run_results.json</span>
+              <span id="slot-results-check" class="dz-slot-check" style="display:none;">&#10003;</span>
+            </div>
+          </div>
         </div>
-        <div id="slot-results" class="dz-slot dz-slot-optional" title="run_results.json (optional)">
-          <span class="dz-slot-icon">&#9201;</span>
-          <span id="slot-results-name">run_results.json</span>
-          <span id="slot-results-check" class="dz-slot-check" style="display:none;">&#10003;</span>
+        <input type="file" id="manifest-upload" accept=".json" multiple style="display:none" onchange="dzFileInput(this)">
+        <button id="az-launch-btn" class="az-btn" onclick="dzLaunch()" disabled>&#127961; LAUNCH CITY</button>
+        <div id="upload-status" class="az-status"></div>
+        <div id="az-loader" style="display:none;width:100%;margin-top:16px;">
+          <div class="az-loader-track"><div id="az-loader-bar" class="az-loader-bar"></div></div>
+          <div id="az-loader-label" class="az-loader-label">PARSING ARCHITECTURE…</div>
         </div>
       </div>
-    </div>
-    <input type="file" id="manifest-upload" accept=".json" multiple style="display:none" onchange="dzFileInput(this)">
-    <button id="az-launch-btn" class="az-btn" onclick="dzLaunch()" disabled>&#127961; LAUNCH CITY</button>
-    <div id="upload-status" class="az-status"></div>
-    <div id="az-loader" style="display:none;width:min(440px,80vw);margin-top:18px;">
-      <div class="az-loader-track"><div id="az-loader-bar" class="az-loader-bar"></div></div>
-      <div id="az-loader-label" class="az-loader-label">PARSING ARCHITECTURE…</div>
+
+      <!-- DIVIDER -->
+      <div class="hub-divider"></div>
+
+      <!-- RIGHT: Live Pipeline -->
+      <div class="hub-panel-right">
+        <div class="hub-panel-header">🔴 Live Pipeline</div>
+
+        <!-- Connect Local -->
+        <button class="lp-btn lp-btn-local" id="btn-connect-local" onclick="connectLocal()">
+          <span class="lp-badge lp-badge-live">LIVE</span>
+          <span class="lp-btn-title">🔗 Connect Local</span>
+          <span class="lp-btn-sub">Mount your dbt project → instant live sync</span>
+        </button>
+
+        <!-- Connect Cloud (Coming Soon) -->
+        <button class="lp-btn lp-btn-cloud" disabled title="Coming Soon">
+          <span class="lp-badge lp-badge-soon">COMING SOON</span>
+          <span class="lp-btn-title">☁️ Connect Cloud</span>
+          <span class="lp-btn-sub">dbt Cloud · Databricks · Snowflake</span>
+        </button>
+
+        <div id="lp-status" style="font-size:0.78rem;color:rgba(255,255,255,0.3);letter-spacing:2px;margin-top:8px;">CHECKING ENVIRONMENT…</div>
+      </div>
     </div>
   </div>
 </div>
+
+<!-- Missing Volume Modal -->
+<div id="local-missing-modal">
+  <div class="lm-card">
+    <div class="lm-title">🛰️ LIVE SYNC</div>
+    <div class="lm-body">Connect your local dbt project to enable live updates in the 3D world.</div>
+    
+    <div class="lm-code-container">
+      <button class="lm-copy-btn" onclick="copyCommand(this)">
+        <span id="copy-icon">📋</span>
+        <span id="copy-text">COPY</span>
+      </button>
+      <div class="lm-code" id="docker-command"># Set your project path in .env:
+HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
+    </div>
+
+    <div class="lm-body" style="font-size:1.2rem; opacity: 0.8; margin-bottom: 10px;">
+      After saving, run <code>docker compose up -d</code> to apply changes. 
+    </div>
+    <div class="lm-body" style="font-size:0.95rem; opacity: 0.5; font-style: italic;">
+      Ensure your project is compiled (run <code>dbt compile</code> first).
+    </div>
+    <div style="display:flex; justify-content: center; margin-top: 20px;">
+      <button class="lm-close" onclick="document.getElementById('local-missing-modal').classList.remove('open')">GOT IT</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  async function copyCommand(btn) {
+    const code = document.getElementById('docker-command').innerText;
+    try {
+      await navigator.clipboard.writeText(code);
+      const icon = btn.querySelector('#copy-icon');
+      const text = btn.querySelector('#copy-text');
+      const oldIcon = icon.innerText;
+      const oldText = text.innerText;
+      
+      btn.classList.add('copied');
+      icon.innerText = '✅';
+      text.innerText = 'COPIED!';
+      
+      setTimeout(() => {
+        btn.classList.remove('copied');
+        icon.innerText = oldIcon;
+        text.innerText = oldText;
+      }, 2000);
+    } catch (err) {
+      console.error('Failed to copy: ', err);
+    }
+  }
+</script>
+
 
 <!-- IDE DOCK -->
 <div id="ide-dock">
@@ -720,7 +973,12 @@ input[type=range].sla-input::-webkit-slider-thumb {
   <div class="hud-item"><span class="hud-icon">🎡</span> <span class="hud-label">SCROLL</span> → ZOOM</div>
   <div style="color:rgba(255,255,255,0.2)">•</div>
   <div class="hud-item"><span class="hud-icon">👆</span> <span class="hud-label">SELECT</span> → INSPECT</div>
+  <div style="color:rgba(255,255,255,0.2)">•</div>
+  <div class="hud-item" id="sync-hud-item" title="Connection Mode">
+    <span id="sync-hud-dot" class="status-dot"></span> <span id="sync-hud-text">CHECKING...</span>
+  </div>
 </div>
+
 
 <!-- Three.js CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
@@ -736,12 +994,10 @@ window.__RAW__ = $DATA_PAYLOAD;
 </body>
 </html>"""
 
-    def generate(self, graph_data: Dict[str, Any], output_path: str):
-        import hashlib, time
-        build_hash = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
+    def generate(self, graph_data: Dict[str, Any], output_path: str, build_id: str = "dev"):
         html = (self.HTML_TEMPLATE
                 .replace("$DATA_PAYLOAD", json.dumps(graph_data, indent=2))
-                .replace("$BUILD_HASH", build_hash))
+                .replace("$BUILD_HASH", build_id))
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(html)

@@ -13,8 +13,6 @@ services:
       - MANIFEST_PATH=/data/${MANIFEST_SUBPATH:-target/manifest.json}
       - PORT=${PORT:-8080}
     volumes:
-      # The host path may not exist yet — always mount so the container
-      # starts in 'Awaiting Data' mode; HOST_PROJECT_PATH defaults to a
-      # local ./data directory so Docker Desktop never blocks the start.
+      # Mount the host project directory to /data in the container
       - ${HOST_PROJECT_PATH:-./data}:/data
     restart: unless-stopped
