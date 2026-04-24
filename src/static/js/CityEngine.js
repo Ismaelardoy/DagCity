@@ -569,7 +569,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
 function updateDroneMovement() {
-  const moveSpeed = 1.8;
+  const moveSpeed = 2.5 * (State.flySpeed || 1.0);
   const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
   const side = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
   if (keys['KeyW'] || keys['ArrowUp'])    { camera.position.addScaledVector(dir,  moveSpeed); controls.target.addScaledVector(dir,  moveSpeed); }
@@ -691,8 +691,8 @@ export function startAnimationLoop() {
                 targetEmissiveColor = 0x000000;
               }
             } else {
-              if (isGhost) { targetOpacity = 0.35; targetEmissiveIntensity = 0.4; targetEmissiveColor = 0xff0000; }
-              else if (isBottleneck) { targetEmissiveIntensity = 0.6; targetEmissiveColor = 0xffaa00; }
+              // In Normal Mode, do not change color for ghosts or bottlenecks
+              targetOpacity = 1.0;
             }
 
             mat.opacity += (targetOpacity - mat.opacity) * 0.1;
@@ -709,7 +709,10 @@ export function startAnimationLoop() {
         const dist = camera.position.distanceTo(m.position);
         const isSelected = (State.selectedNode && State.selectedNode.id === n.id);
         const inFocus = (!State.selectedNode || critSet.has(n.id));
-        const shouldShow = State.perfMode && (isBottleneck || dist < 800 || isSelected);
+        
+        // Time labels only show in Performance Mode. 
+        // We show all of them if close, plus bottlenecks from far away.
+        const shouldShow = State.perfMode && (isBottleneck || dist < 2500 || isSelected);
 
         if (shouldShow && inFocus) {
           timeLabel.visible = true;

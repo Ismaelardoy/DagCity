@@ -994,6 +994,38 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
       </div>
     </div>
     <div class="sla-section">
+      <div class="sla-label">Thermal VFX Sensitivity</div>
+      <div class="sla-desc" style="margin-bottom:12px;">Trigger effects based on SLA ratio (e.g., 1.5x threshold)</div>
+      
+      <div class="sla-row">
+        <div class="sla-name">💨 Smoke Threshold</div>
+        <div class="sla-val" id="val-vfx-smoke">1.0x</div>
+      </div>
+      <div class="sla-slider-track">
+        <div class="sla-slider-fill" id="fill-vfx-smoke" style="width:20%"></div>
+        <input type="range" class="sla-input" id="input-vfx-smoke" min="50" max="300" value="100" oninput="window._onVFX('smoke', this.value)" onchange="window._saveVFX()">
+      </div>
+
+      <div class="sla-row" style="margin-top:12px;">
+        <div class="sla-name">⚡ Sparks & Pulse</div>
+        <div class="sla-val" id="val-vfx-sparks">1.2x</div>
+      </div>
+      <div class="sla-slider-track">
+        <div class="sla-slider-fill" id="fill-vfx-sparks" style="width:28%"></div>
+        <input type="range" class="sla-input" id="input-vfx-sparks" min="50" max="300" value="120" oninput="window._onVFX('sparks', this.value)" onchange="window._saveVFX()">
+      </div>
+
+      <div class="sla-row" style="margin-top:12px;">
+        <div class="sla-name">🔥 Critical Fire</div>
+        <div class="sla-val" id="val-vfx-fire">1.5x</div>
+      </div>
+      <div class="sla-slider-track">
+        <div class="sla-slider-fill" id="fill-vfx-fire" style="width:40%"></div>
+        <input type="range" class="sla-input" id="input-vfx-fire" min="50" max="300" value="150" oninput="window._onVFX('fire', this.value)" onchange="window._saveVFX()">
+      </div>
+    </div>
+
+    <div class="sla-section">
       <div class="sla-label">Zone Overrides (by Layer)</div>
       <div id="sla-zones"><!-- dynamic --></div>
     </div>
@@ -1016,13 +1048,13 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
   <div id="sla-body">
     <div class="settings-section">
       <div class="settings-label">Camera & Input</div>
-      <div class="settings-row">
-        <div class="settings-name">Navigation Sensitivity</div>
-        <div class="settings-val" id="val-cam-sens">1.0x</div>
+      <div class="settings-row" style="margin-top:20px;">
+        <div class="settings-name">Drone Fly Speed (WASD)</div>
+        <div class="settings-val" id="val-fly-speed">1.0x</div>
       </div>
       <div class="sla-slider-track">
-        <div class="sla-slider-fill" id="fill-cam-sens" style="width:33%"></div>
-        <input type="range" class="sla-input" id="input-cam-sens" min="50" max="200" value="100">
+        <div class="sla-slider-fill" id="fill-fly-speed" style="width:20%"></div>
+        <input type="range" class="sla-input" id="input-fly-speed" min="50" max="300" value="100" oninput="window._onFlySpeed(this.value)" onchange="window._onFlySpeedChange()">
       </div>
     </div>
 

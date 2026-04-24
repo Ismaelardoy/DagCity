@@ -109,16 +109,19 @@ export class VFXManager {
       if (slaTarget === undefined) slaTarget = State.slaZones[n.layer];
       if (slaTarget === undefined) slaTarget = State.userDefinedSLA;
       
+      const vfxThresholds = State.vfxThresholds || { smoke: 1.0, sparks: 1.2, fire: 1.5 };
       const ratio = (slaTarget <= 0) ? 999 : (n.execution_time / slaTarget);
       const isError = n.status === 'error' || n.state === 'error';
       const smoke  = vfx.children.find(c => c.name === 'vfx_smoke');
       const sparks = vfx.children.find(c => c.name === 'vfx_sparks');
       const fire   = vfx.children.find(c => c.name === 'vfx_fire');
       const currentH = ud.baseH * m.scale.y;
-      vfx.visible = State.perfMode && State.showParticles && (ratio >= 1.0 || isError);
+      
+      // We only show thermal effects if Performance Mode is ON and Particles are enabled
+      vfx.visible = State.perfMode && State.showParticles && (ratio >= vfxThresholds.smoke || isError);
 
-      // ── Level 1: Smoke (Ratio >= 1.0) ─────────────────
-      const showSmoke = (ratio >= 1.0 || isError) && State.perfMode && State.showParticles;
+      // ── Level 1: Smoke (Ratio >= smoke threshold) ─────────────────
+      const showSmoke = State.perfMode && State.showParticles && (ratio >= vfxThresholds.smoke || isError);
       smoke.visible = showSmoke;
       if (showSmoke) {
         smoke.children.forEach(s => {
@@ -131,12 +134,13 @@ export class VFXManager {
             sud.offset.z + Math.cos(t * 2 + sud.phase) * 4
           );
           s.material.opacity = Math.sin(sud.life * Math.PI) * 0.45;
-          s.scale.setScalar((8 + sud.life * 30) / m.scale.y);
+          const sScale = (8 + sud.life * 30);
+          s.scale.set(sScale, sScale / m.scale.y, 1);
         });
       }
 
-      // ── Level 2: Sparks & Pulse (Ratio >= 1.2) ────────
-      const showSparks = (ratio >= 1.2 || isError) && State.perfMode && State.showParticles;
+      // ── Level 2: Sparks & Pulse (Ratio >= sparks threshold) ────────
+      const showSparks = State.perfMode && State.showParticles && (ratio >= vfxThresholds.sparks || isError);
       sparks.visible = showSparks;
       if (showSparks) {
         sparks.children.forEach(s => {
@@ -150,7 +154,8 @@ export class VFXManager {
           s.position.addScaledVector(sud.vel, dt / m.scale.y);
           sud.vel.y -= 350 * dt;
           s.material.opacity = (1.0 - sud.age) * 0.9;
-          s.scale.setScalar(2.0 * (1.0 - sud.age) / m.scale.y);
+          const spkScale = 2.0 * (1.0 - sud.age);
+          s.scale.set(spkScale, spkScale / m.scale.y, 1);
         });
         // Breathing pulse
         const pulse = 0.5 + Math.sin(t * 4) * 0.5;
@@ -161,8 +166,8 @@ export class VFXManager {
         m.material.forEach(mat => { mat.emissiveIntensity += (0.15 - mat.emissiveIntensity) * 0.05; });
       }
 
-      // ── Level 3: Fire (Ratio >= 1.5) ───────────────────
-      const showFire = (ratio >= 1.5 || isError) && State.perfMode && State.showParticles;
+      // ── Level 3: Fire (Ratio >= fire threshold) ───────────────────
+      const showFire = State.perfMode && State.showParticles && (ratio >= vfxThresholds.fire || isError);
       fire.visible = showFire;
       if (showFire) {
         fire.children.forEach(f => {
@@ -170,7 +175,8 @@ export class VFXManager {
           const life = (t * fud.speed + fud.phase) % 1.0;
           const age = 1.0 - life;
           f.position.set(fud.offset.x * age, (currentH + life * 50) / m.scale.y, fud.offset.y * age);
-          f.scale.setScalar(20 * age / m.scale.y);
+          const fScale = 20 * age;
+          f.scale.set(fScale, fScale / m.scale.y, 1);
           f.material.opacity = age * 0.9;
         });
       }

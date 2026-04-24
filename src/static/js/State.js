@@ -12,9 +12,15 @@ export const State = {
   userDefinedSLA: 120,  // Global threshold (seconds)
   slaZones: {},         // layer -> threshold
   slaNodes: {},         // nodeId -> threshold
+  vfxThresholds: {      // SLA ratios for particle triggers
+    smoke: 1.0,
+    sparks: 1.2,
+    fire: 1.5
+  },
 
   // ── Engine & Viewport ─────────────────────────────
   camSensitivity: 1.0,
+  flySpeed: 1.0,
   neonIntensity: 0.0,
   showLabels: true,
   showParticles: true,

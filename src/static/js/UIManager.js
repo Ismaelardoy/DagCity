@@ -104,41 +104,38 @@ function toggleSettingsPanel() {
 }
 
 export function initSettings() {
-  document.getElementById('dock-settings').addEventListener('click', toggleSettingsPanel);
-  document.getElementById('settings-close').addEventListener('click', toggleSettingsPanel);
-
-  // Camera Sensitivity
-  const inputCam = document.getElementById('input-cam-sens');
-  const valCam   = document.getElementById('val-cam-sens');
-  const fillCam  = document.getElementById('fill-cam-sens');
-  inputCam.addEventListener('input', () => {
-    const val = inputCam.value / 100;
-    valCam.textContent = val.toFixed(1) + 'x';
-    fillCam.style.width = ((inputCam.value - 50) / 150 * 100) + '%';
-    State.set('camSensitivity', val);
-  });
+  const dSet = document.getElementById('dock-settings');
+  const sCls = document.getElementById('settings-close');
+  if (dSet) dSet.addEventListener('click', toggleSettingsPanel);
+  if (sCls) sCls.addEventListener('click', toggleSettingsPanel);
 
   // Neon Bloom
   const inputBloom = document.getElementById('input-bloom');
   const valBloom   = document.getElementById('val-bloom');
   const fillBloom  = document.getElementById('fill-bloom');
-  inputBloom.addEventListener('input', () => {
-    const val = (inputBloom.value / 100);
-    valBloom.textContent = val.toFixed(1);
-    fillBloom.style.width = (inputBloom.value / 200 * 100) + '%';
-    State.set('neonIntensity', val);
-  });
+  if (inputBloom && valBloom && fillBloom) {
+    inputBloom.addEventListener('input', () => {
+      const val = (inputBloom.value / 100);
+      valBloom.textContent = val.toFixed(1);
+      fillBloom.style.width = (inputBloom.value / 200 * 100) + '%';
+      State.set('neonIntensity', val);
+    });
+  }
 
   // Visibility Toggles
   const checkLabels = document.getElementById('check-labels');
-  checkLabels.addEventListener('change', () => {
-    State.set('showLabels', checkLabels.checked);
-  });
+  if (checkLabels) {
+    checkLabels.addEventListener('change', () => {
+      State.set('showLabels', checkLabels.checked);
+    });
+  }
 
   const checkVfx = document.getElementById('check-vfx');
-  checkVfx.addEventListener('change', () => {
-    State.set('showParticles', checkVfx.checked);
-  });
+  if (checkVfx) {
+    checkVfx.addEventListener('change', () => {
+      State.set('showParticles', checkVfx.checked);
+    });
+  }
 }
 
 function handleManualSLAInput(el, onSync) {
@@ -257,7 +254,12 @@ function saveSLAToProject() {
   if (!projectName) return;
   fetch(`/api/projects/${encodeURIComponent(projectName)}/sla`, {
     method: 'PATCH', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ global: State.userDefinedSLA, zones: {...State.slaZones}, nodes: {...State.slaNodes} })
+    body: JSON.stringify({ 
+      global: State.userDefinedSLA, 
+      zones: {...State.slaZones}, 
+      nodes: {...State.slaNodes},
+      vfxThresholds: {...State.vfxThresholds}
+    })
   }).catch(e => console.warn('[SLA] Save failed:', e));
 }
 
@@ -299,6 +301,22 @@ export function loadSLAFromProject(graphData) {
   State.userDefinedSLA = sla.global ?? 120;
   Object.assign(State.slaZones, sla.zones || {});
   Object.assign(State.slaNodes, sla.nodes || {});
+  
+  if (sla.vfxThresholds) {
+    Object.assign(State.vfxThresholds, sla.vfxThresholds);
+    ['smoke', 'sparks', 'fire'].forEach(type => {
+      const val = State.vfxThresholds[type];
+      const input = document.getElementById(`input-vfx-${type}`);
+      const valEl = document.getElementById(`val-vfx-${type}`);
+      const fill  = document.getElementById(`fill-vfx-${type}`);
+      if (input) {
+        input.value = Math.round(val * 100);
+        if (valEl) valEl.textContent = val.toFixed(1) + 'x';
+        if (fill)  fill.style.width = ((input.value - 50) / 250 * 100) + '%';
+      }
+    });
+  }
+
   const globalInput = document.getElementById('sla-global-input');
   const globalFill  = document.getElementById('sla-global-fill');
   const globalVal   = document.getElementById('sla-global-val');
@@ -314,6 +332,35 @@ export function loadSLAFromProject(graphData) {
 window._onZoneSLA    = onZoneSLA;
 window._onNodeSLA    = onNodeSLA;
 window._removeNodeSLA = removeNodeSLA;
+
+// Inline handlers for new sliders
+window._onFlySpeed = (rawValue) => {
+  const val = parseFloat(rawValue) / 100;
+  const valEl = document.getElementById('val-fly-speed');
+  const fill = document.getElementById('fill-fly-speed');
+  if (valEl) valEl.textContent = val.toFixed(1) + 'x';
+  if (fill) fill.style.width = ((parseFloat(rawValue) - 50) / 250 * 100) + '%';
+  State.set('flySpeed', val);
+};
+
+window._onFlySpeedChange = () => {
+  // Can add save logic if we decide to persist fly speed per project, 
+  // but currently it's just a session setting.
+};
+
+window._onVFX = (type, rawValue) => {
+  const val = parseFloat(rawValue) / 100;
+  const valEl = document.getElementById(`val-vfx-${type}`);
+  const fill = document.getElementById(`fill-vfx-${type}`);
+  if (valEl) valEl.textContent = val.toFixed(1) + 'x';
+  if (fill) fill.style.width = ((parseFloat(rawValue) - 50) / 250 * 100) + '%';
+  if (!State.vfxThresholds) State.vfxThresholds = { smoke: 1.0, sparks: 1.2, fire: 1.5 };
+  State.vfxThresholds[type] = val;
+};
+
+window._saveVFX = () => {
+  saveSLAToProject();
+};
 
 // ── Project Manager ─────────────────────────────────────
 const projectModal = document.getElementById('project-modal');
@@ -467,44 +514,64 @@ export function initDock() {
   const labelRotate = document.getElementById('label-rotate');
   const labelPerf   = document.getElementById('label-perf');
 
-  dockRotate.addEventListener('click', () => {
-    resetSelection();
-    if (!controls) return;
-    controls.autoRotate = !controls.autoRotate;
-    dockRotate.classList.toggle('active', controls.autoRotate);
-    labelRotate.textContent = controls.autoRotate ? 'AUTO-ROTATE: ON' : 'AUTO-ROTATE: OFF';
-    if (controls.autoRotate) {
-      const farPos = camera.position.clone().normalize().multiplyScalar(450); farPos.y = 110;
-      tweenCamera(farPos, {x:0,y:0,z:0}, 2000);
-    }
-  });
-
-  dockPerf.addEventListener('click', () => {
-    State.set('perfMode', !State.perfMode);
-    dockPerf.classList.toggle('perf-on', State.perfMode);
-    labelPerf.textContent = State.perfMode ? 'PERFORMANCE 3D: ON' : 'PERFORMANCE 3D: OFF';
-    meshes.forEach(m => {
-      const ud = m.userData;
-      ud.targetH = State.perfMode ? ud.perfH : ud.baseH;
-      if (ud.hazard) ud.hazard.visible = !State.perfMode;
+  if (dockRotate) {
+    dockRotate.addEventListener('click', () => {
+      resetSelection();
+      if (!controls) return;
+      controls.autoRotate = !controls.autoRotate;
+      dockRotate.classList.toggle('active', controls.autoRotate);
+      if (labelRotate) labelRotate.textContent = controls.autoRotate ? 'AUTO-ROTATE: ON' : 'AUTO-ROTATE: OFF';
+      if (controls.autoRotate) {
+        const farPos = camera.position.clone().normalize().multiplyScalar(450); farPos.y = 110;
+        tweenCamera(farPos, {x:0,y:0,z:0}, 2000);
+      }
     });
-  });
+  }
 
-  dockReset.addEventListener('click', () => {
-    tweenCamera(INIT_CAM, {x:0,y:0,z:0}, 1200);
-    if (controls) {
-      controls.autoRotate = true;
-      dockRotate.classList.add('active'); labelRotate.textContent = 'AUTO-ROTATE: ON';
-    }
-    sidebar.classList.remove('open'); resetSelection();
-  });
+  if (dockPerf) {
+    dockPerf.addEventListener('click', () => {
+      State.set('perfMode', !State.perfMode);
+      dockPerf.classList.toggle('perf-on', State.perfMode);
+      if (labelPerf) labelPerf.textContent = State.perfMode ? 'PERFORMANCE 3D: ON' : 'PERFORMANCE 3D: OFF';
+      meshes.forEach(m => {
+        const ud = m.userData;
+        ud.targetH = State.perfMode ? ud.perfH : ud.baseH;
+        if (ud.hazard) ud.hazard.visible = !State.perfMode;
+      });
+      updateFires();
+    });
+  }
 
-  document.getElementById('sb-close').addEventListener('click', closeSidebar);
-  document.getElementById('dock-projects').addEventListener('click', openProjectModal);
-  document.getElementById('pm-close').addEventListener('click', () => projectModal.classList.remove('open'));
-  document.getElementById('pm-new-project').addEventListener('click', startNewProject);
-  projectModal.addEventListener('click', e => { if (e.target === projectModal) projectModal.classList.remove('open'); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') projectModal.classList.remove('open'); });
+  if (dockReset) {
+    dockReset.addEventListener('click', () => {
+      tweenCamera(INIT_CAM, {x:0,y:0,z:0}, 1200);
+      if (controls) {
+        controls.autoRotate = true;
+        if (dockRotate) dockRotate.classList.add('active'); 
+        if (labelRotate) labelRotate.textContent = 'AUTO-ROTATE: ON';
+      }
+      if (sidebar) sidebar.classList.remove('open'); 
+      resetSelection();
+    });
+  }
+
+  const sbClose = document.getElementById('sb-close');
+  if (sbClose) sbClose.addEventListener('click', closeSidebar);
+  
+  const dProj = document.getElementById('dock-projects');
+  if (dProj) dProj.addEventListener('click', openProjectModal);
+  
+  const pmClose = document.getElementById('pm-close');
+  if (pmClose) pmClose.addEventListener('click', () => projectModal.classList.remove('open'));
+  
+  const pmNew = document.getElementById('pm-new-project');
+  if (pmNew) pmNew.addEventListener('click', startNewProject);
+
+  if (projectModal) {
+    projectModal.addEventListener('click', e => { if (e.target === projectModal) projectModal.classList.remove('open'); });
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && projectModal) projectModal.classList.remove('open'); });
+  
   initStatusHUD();
   initSettings();
 }
@@ -624,8 +691,10 @@ function findNodeInHierarchy(obj) {
 
 // ── SLA Init ──────────────────────────────────────────
 export function initSLA() {
-  document.getElementById('dock-sla').addEventListener('click', toggleSlaPanel);
-  document.getElementById('sla-close').addEventListener('click', toggleSlaPanel);
+  const dSla = document.getElementById('dock-sla');
+  const sCls = document.getElementById('sla-close');
+  if (dSla) dSla.addEventListener('click', toggleSlaPanel);
+  if (sCls) sCls.addEventListener('click', toggleSlaPanel);
 
   const globalInput = document.getElementById('sla-global-input');
   const globalFill  = document.getElementById('sla-global-fill');
@@ -633,14 +702,22 @@ export function initSLA() {
 
   const syncGlobal = val => {
     State.userDefinedSLA = val;
-    globalInput.value = val;
-    globalFill.style.width = Math.round((val/1000)*100) + '%';
-    globalVal.textContent  = val + 's';
+    if (globalInput) globalInput.value = val;
+    if (globalFill) globalFill.style.width = Math.round((val/1000)*100) + '%';
+    if (globalVal) globalVal.textContent  = val + 's';
     updateFires(); saveSLAToProject();
   };
 
-  globalInput.addEventListener('input', () => syncGlobal(parseInt(globalInput.value)));
-  handleManualSLAInput(globalVal, syncGlobal);
+  if (globalInput) {
+    globalInput.addEventListener('input', () => syncGlobal(parseInt(globalInput.value)));
+  }
+  if (globalVal) handleManualSLAInput(globalVal, syncGlobal);
+
+  // VFX Thresholds (Safely initialize if State was not updated correctly in container)
+  if (!State.vfxThresholds) {
+    console.warn('[SLA] vfxThresholds missing in State, initializing manually...');
+    State.vfxThresholds = { smoke: 1.0, sparks: 1.2, fire: 1.5 };
+  }
 
   const searchEl  = document.getElementById('sla-node-search');
   const resultsEl = document.getElementById('sla-node-results');
@@ -690,18 +767,31 @@ export function updateSyncHUD(source) {
 }
 
 export function initHUD(renderer) {
+  if (!renderer) return;
   const smartHUD   = document.getElementById('smart-hud');
   const helpTrigger = document.getElementById('help-trigger-left');
   const helpHint   = document.getElementById('help-hint');
   let userInteracted = false;
+  
   function hideHUD() {
-    if (!userInteracted) { smartHUD.classList.add('hidden'); helpHint.classList.add('fade-out'); userInteracted = true; }
+    if (!userInteracted && smartHUD && helpHint) { 
+      smartHUD.classList.add('hidden'); 
+      helpHint.classList.add('fade-out'); 
+      userInteracted = true; 
+    }
   }
-  setTimeout(() => helpHint.classList.add('fade-out'), 10000);
-  renderer.domElement.addEventListener('mousedown', hideHUD);
-  renderer.domElement.addEventListener('wheel', hideHUD);
-  helpTrigger.addEventListener('mouseenter', () => smartHUD.classList.remove('hidden'));
-  helpTrigger.addEventListener('mouseleave', () => { if(userInteracted) smartHUD.classList.add('hidden'); });
+  
+  if (helpHint) setTimeout(() => helpHint.classList.add('fade-out'), 10000);
+  
+  if (renderer.domElement) {
+    renderer.domElement.addEventListener('mousedown', hideHUD);
+    renderer.domElement.addEventListener('wheel', hideHUD);
+  }
+  
+  if (helpTrigger && smartHUD) {
+    helpTrigger.addEventListener('mouseenter', () => smartHUD.classList.remove('hidden'));
+    helpTrigger.addEventListener('mouseleave', () => { if(userInteracted) smartHUD.classList.add('hidden'); });
+  }
 }
 
 // Re-export rebuildCity wrapper that also updates SLA UI
