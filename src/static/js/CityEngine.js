@@ -817,7 +817,7 @@ export function rebuildCity(graphData, isLiveSync = false) {
 
   const projects = [...new Set(nodes.map(n => n.group || 'default'))];
   const projectCenters = {};
-  const radius = projects.length > 1 ? Math.max(1500, projects.length * 600) : 0;
+  const radius = projects.length > 1 ? Math.max(600, projects.length * 300) : 0;
   projects.forEach((p, i) => {
     const angle = (i / projects.length) * Math.PI * 2;
     projectCenters[p] = {
