@@ -2,9 +2,10 @@ import os
 import json
 import shutil
 from datetime import datetime
-from typing import List, Dict
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
-from core.config import PROJECTS_DIR, WORKSPACE_PATH, EXTERNAL_MANIFEST_PATH, is_live_sync_available
+import core.config as config
+from core.config import PROJECTS_DIR, WORKSPACE_PATH, is_live_sync_available
 from core.parser import ManifestParser
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -14,6 +15,31 @@ def _set_workspace_active_project(name: str):
         with open(WORKSPACE_PATH, "w") as f:
             json.dump({"active_project": name}, f)
     except: pass
+
+def _sanitize_project_name(name: str) -> str:
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (name or "").strip())
+    return safe[:64]
+
+def _current_live_project_name() -> Optional[str]:
+    if not is_live_sync_available():
+        return None
+    try:
+        with open(config.EXTERNAL_MANIFEST_PATH) as f:
+            manifest = json.load(f)
+        meta_name = manifest.get("metadata", {}).get("project_name")
+        if not isinstance(meta_name, str) or not meta_name.strip():
+            return None
+        return _sanitize_project_name(meta_name)
+    except Exception:
+        return None
+
+def _is_live_project_enabled(project_name: str, meta: dict) -> bool:
+    if meta.get("source") != "live_sync":
+        return True
+    current_live = _current_live_project_name()
+    if not current_live:
+        return False
+    return project_name == current_live
 
 @router.get("")
 async def list_projects():
@@ -34,12 +60,19 @@ async def list_projects():
             if os.path.exists(meta_path):
                 with open(meta_path) as f:
                     meta = json.load(f)
-            
+
+            disabled = not _is_live_project_enabled(name, meta)
+            reason = ""
+            if disabled and meta.get("source") == "live_sync":
+                reason = "Live source changed or unavailable"
+
             projects.append({
                 "name": name,
                 "node_count": meta.get("node_count", 0),
                 "created_at": meta.get("created_at", ""),
-                "source": meta.get("source", "offline")
+                "source": meta.get("source", "offline"),
+                "disabled": disabled,
+                "disabled_reason": reason,
             })
         except Exception as e:
             print(f"[ERROR] Failed to load project metadata for {name}: {e}")
@@ -56,13 +89,18 @@ async def get_project(name: str):
     # Bypass cache if it's the live project
     meta_path = os.path.join(PROJECTS_DIR, name, "meta.json")
     is_live = False
+    meta = {}
     if os.path.exists(meta_path):
         with open(meta_path) as f:
-            is_live = json.load(f).get("source") == "live_sync"
+            meta = json.load(f)
+            is_live = meta.get("source") == "live_sync"
+
+    if is_live and not _is_live_project_enabled(name, meta):
+        raise HTTPException(status_code=423, detail="Live Sync project is inactive (source changed).")
             
     if is_live and is_live_sync_available():
         try:
-            parser = ManifestParser(EXTERNAL_MANIFEST_PATH)
+            parser = ManifestParser(config.EXTERNAL_MANIFEST_PATH)
             data = parser.parse()
         except Exception as e:
             # Fallback to cached version if parsing fails

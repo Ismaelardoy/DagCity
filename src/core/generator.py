@@ -32,6 +32,113 @@ class VizGenerator:
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; color: var(--cyan); }
 #canvas-container { width: 100vw; height: 100vh; position: fixed; top: 0; left: 0; }
+#graph2d-container {
+  width: 100vw;
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+  display: none;
+  z-index: 5;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(255, 0, 255, 0.07), transparent 30%),
+    radial-gradient(circle at 70% 80%, rgba(0, 243, 255, 0.08), transparent 35%),
+    linear-gradient(160deg, #020611 0%, #000409 45%, #02070f 100%);
+}
+
+#view-toggle {
+  position: fixed;
+  top: 122px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  display: inline-flex;
+  border: 1px solid rgba(0,243,255,0.35);
+  border-radius: 999px;
+  background: rgba(4, 10, 24, 0.86);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+  box-shadow: 0 0 24px rgba(0,0,0,0.4);
+}
+.view-pill {
+  border: none;
+  background: transparent;
+  color: rgba(0,243,255,0.75);
+  padding: 8px 16px;
+  font-size: 11px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
+}
+.view-pill.active {
+  background: rgba(0,243,255,0.18);
+  color: #e9feff;
+  text-shadow: 0 0 10px rgba(0,243,255,0.45);
+}
+
+#omni-launch {
+  position: fixed;
+  top: 164px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  min-width: 360px;
+  border: 1px solid rgba(255,0,255,0.28);
+  border-radius: 10px;
+  background: rgba(8, 7, 19, 0.85);
+  color: rgba(255,255,255,0.75);
+  padding: 9px 14px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+#omni-launch:hover { border-color: rgba(255,0,255,0.55); color: #fff; }
+
+#omni-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 100px;
+  background: rgba(0,0,0,0.48);
+  backdrop-filter: blur(4px);
+}
+#omni-modal.open { display: flex; }
+#omni-card {
+  width: min(720px, 90vw);
+  border: 1px solid rgba(0,243,255,0.35);
+  border-radius: 14px;
+  background: rgba(3, 10, 24, 0.96);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.55), 0 0 22px rgba(0,243,255,0.18);
+  overflow: hidden;
+}
+#omni-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid rgba(0,243,255,0.2);
+  background: rgba(255,255,255,0.02);
+  color: #fff;
+  padding: 16px;
+  font-size: 14px;
+  letter-spacing: 1px;
+  outline: none;
+}
+#omni-results { max-height: 360px; overflow: auto; }
+.omni-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  color: #d6ecff;
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  cursor: pointer;
+}
+.omni-item:hover, .omni-item.active { background: rgba(0,243,255,0.12); color: #fff; }
+.omni-meta { color: rgba(255,255,255,0.42); font-size: 11px; }
 
 /* ── HEADER ── */
 #header {
@@ -87,6 +194,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 }
 .dock-item.active { color: var(--cyan); border-left-color: var(--cyan); background: rgba(0,242,255,0.08); }
 .dock-item.perf-on { color: var(--orange); border-left-color: var(--orange); }
+.dock-item.data-volume-on { color: var(--green); border-left-color: var(--green); background: rgba(57,255,20,0.08); }
 .dock-item.ai-item { color: var(--magenta); }
 .dock-item.ai-item:hover { color: var(--magenta); background: rgba(255,0,255,0.06); border-left-color: var(--magenta); }
 .dock-icon { font-size: 22px; flex-shrink: 0; width: 26px; text-align: center; }
@@ -94,6 +202,30 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 #ide-dock:hover .dock-label, #ide-dock.expanded .dock-label { opacity: 1; }
 
 .dock-divider { height: 1px; background: rgba(0,242,255,0.08); margin: 4px 14px; }
+
+/* ── DATA VOLUME LABELS ── */
+.data-volume-label {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: bold;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.7);
+  border: 1px solid #00f3ff;
+  color: #00f3ff;
+  box-shadow: 0 0 10px rgba(0,243,255,0.3);
+  pointer-events: none;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.3s;
+  text-shadow: 0 0 5px rgba(0,243,255,0.5);
+}
+.data-volume-label.critical {
+  border-color: #ff4400;
+  color: #ff4400;
+  box-shadow: 0 0 10px rgba(255,68,0,0.5);
+  text-shadow: 0 0 5px rgba(255,68,0,0.5);
+}
 
 /* ── SLA PANEL ── */
 #sla-panel {
@@ -217,6 +349,84 @@ input:checked + .slider:before { transform: translateX(16px); }
 }
 .add-override-btn:hover { background: rgba(0, 242, 255, 0.15); border-color: var(--cyan); }
 
+.settings-text-input {
+  width: 100%;
+  border: 1px solid rgba(0,242,255,0.3);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.35);
+  color: #e9feff;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  padding: 10px 12px;
+}
+.settings-text-input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 1px rgba(0,242,255,0.25); }
+.settings-inline-btn {
+  margin-top: 10px;
+  border: 1px solid rgba(255,0,255,0.35);
+  background: rgba(255,0,255,0.08);
+  color: #ffd8ff;
+  padding: 8px 11px;
+  border-radius: 8px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  font-size: 11px;
+  font-weight: bold;
+}
+.settings-inline-btn:hover { background: rgba(255,0,255,0.18); }
+
+#ai-panel {
+  display: none;
+  position: fixed; top: 0; left: 62px; width: 420px; height: 100vh;
+  background: rgba(4, 6, 18, 0.98);
+  border-right: 1px solid rgba(255,0,255,0.24);
+  z-index: 600;
+  flex-direction: column;
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  box-shadow: 8px 0 40px rgba(0,0,0,0.6);
+  animation: sla-slide-in 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#ai-panel.open { display: flex; }
+#ai-chat-body { flex: 1; overflow-y: auto; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+.ai-msg {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.ai-msg.user { align-self: flex-end; background: rgba(0,243,255,0.14); color: #e9feff; border-color: rgba(0,243,255,0.32); }
+.ai-msg.assistant { align-self: flex-start; background: rgba(255,0,255,0.10); color: #ffe9ff; border-color: rgba(255,0,255,0.28); }
+.ai-msg.system { align-self: center; background: rgba(255,102,0,0.1); color: #ffd8ba; border-color: rgba(255,102,0,0.35); }
+#ai-chat-input-row {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+#ai-chat-input {
+  border: 1px solid rgba(255,0,255,0.28);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.35);
+  color: #fff;
+  padding: 10px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+}
+#ai-chat-send {
+  border: 1px solid rgba(0,243,255,0.35);
+  background: rgba(0,243,255,0.14);
+  color: #dffcff;
+  border-radius: 8px;
+  padding: 10px 12px;
+  letter-spacing: 1px;
+  font-size: 11px;
+  cursor: pointer;
+  font-weight: bold;
+}
+#ai-chat-send:hover { background: rgba(0,243,255,0.24); }
+
 /* ── SETTINGS PANEL ── */
 #settings-panel {
   display: none;
@@ -236,6 +446,142 @@ input:checked + .slider:before { transform: translateX(16px); }
 .settings-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .settings-name { font-size: 15px; color: #fff; letter-spacing: 1px; }
 .settings-val { font-size: 18px; font-weight: 900; color: var(--cyan); text-shadow: 0 0 8px var(--cyan); }
+.settings-action-btn {
+  width: 100%;
+  border: 1px solid rgba(0,242,255,0.35);
+  border-radius: 10px;
+  background: rgba(0,242,255,0.08);
+  color: var(--cyan);
+  cursor: pointer;
+  font-family: 'Courier New', monospace;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 10px 12px;
+  transition: all 0.2s ease;
+}
+.settings-action-btn:hover {
+  background: rgba(0,242,255,0.14);
+  box-shadow: 0 0 18px rgba(0,242,255,0.18);
+}
+
+#architecture-panel {
+  display: none;
+  position: fixed; top: 0; left: 62px; width: 420px; height: 100vh;
+  background: rgba(2, 6, 18, 0.97);
+  border-right: 1px solid rgba(57,255,20,0.2);
+  z-index: 600;
+  flex-direction: column;
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  box-shadow: 8px 0 40px rgba(0,0,0,0.6);
+  animation: sla-slide-in 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#architecture-panel.open { display: flex; }
+.arch-subgroup {
+  margin-top: 14px;
+  max-height: 520px;
+  opacity: 1;
+  overflow: hidden;
+  transition: max-height 0.28s ease, opacity 0.22s ease, margin-top 0.22s ease;
+}
+.arch-subgroup.hidden {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  pointer-events: none;
+}
+.arch-select {
+  width: 100%;
+  border: 1px solid rgba(57,255,20,0.35);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.45);
+  color: #e8ffe2;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  padding: 9px 10px;
+}
+.arch-select:focus { outline: none; box-shadow: 0 0 0 1px rgba(57,255,20,0.45); }
+.arch-number {
+  width: 100%;
+  border: 1px solid rgba(57,255,20,0.35);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.45);
+  color: #e8ffe2;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  padding: 9px 10px;
+}
+.arch-number:focus { outline: none; box-shadow: 0 0 0 1px rgba(57,255,20,0.45); }
+.arch-preview {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(57,255,20,0.25);
+  background: rgba(57,255,20,0.05);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.arch-preview.severity-low {
+  border-color: rgba(57,255,20,0.45);
+  box-shadow: 0 0 16px rgba(57,255,20,0.12);
+  background: rgba(57,255,20,0.06);
+}
+.arch-preview.severity-mid {
+  border-color: rgba(255,215,0,0.45);
+  box-shadow: 0 0 16px rgba(255,215,0,0.12);
+  background: rgba(255,215,0,0.06);
+}
+.arch-preview.severity-high {
+  border-color: rgba(255,68,0,0.5);
+  box-shadow: 0 0 18px rgba(255,68,0,0.16);
+  background: rgba(255,68,0,0.08);
+}
+.arch-preview-title {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: rgba(57,255,20,0.8);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+.arch-preview-value {
+  font-size: 13px;
+  color: #e8ffe2;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.arch-preview-value.severity-low {
+  color: #39ff14;
+  text-shadow: 0 0 10px rgba(57,255,20,0.35);
+}
+.arch-preview-value.severity-mid {
+  color: #ffd700;
+  text-shadow: 0 0 10px rgba(255,215,0,0.35);
+}
+.arch-preview-value.severity-high {
+  color: #ff4400;
+  text-shadow: 0 0 10px rgba(255,68,0,0.35);
+}
+.arch-threshold-legend {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  display: grid;
+  gap: 4px;
+}
+.arch-threshold-legend .legend-row {
+  font-size: 11px;
+  color: #cfd6e5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.arch-threshold-legend .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
 
 /* Toggle Switches */
 .switch { position: relative; display: inline-block; width: 44px; height: 22px; }
@@ -277,6 +623,31 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 #pm-body { overflow-y: auto; padding: 20px 28px; flex: 1; }
 #pm-body::-webkit-scrollbar { width: 5px; }
 #pm-body::-webkit-scrollbar-thumb { background: rgba(0,242,255,0.2); border-radius: 3px; }
+#pm-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.pm-filter-btn {
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.75);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.pm-filter-btn.active {
+  border-color: rgba(0,242,255,0.6);
+  color: #e9feff;
+  background: rgba(0,242,255,0.16);
+  box-shadow: 0 0 10px rgba(0,242,255,0.2);
+}
 #pm-empty { color: rgba(255,255,255,0.3); text-align: center; padding: 50px 0; letter-spacing: 3px; font-size: 13px; }
 .pm-project-row {
   background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
@@ -767,8 +1138,22 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 <body>
 <div id="js-error-overlay"></div>
 <div id="canvas-container"></div>
+<div id="graph2d-container"></div>
 <div id="header">DAG_CITY</div>
 <div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V5.2</div>
+
+<div id="view-toggle">
+  <button class="view-pill" id="view-mode-2d">2D MAP</button>
+  <button class="view-pill active" id="view-mode-3d">3D CITY</button>
+</div>
+
+<button id="omni-launch">⌘/Ctrl + K · Jump to model…</button>
+<div id="omni-modal">
+  <div id="omni-card">
+    <input id="omni-input" type="text" placeholder="Search models, layers, packages…" autocomplete="off">
+    <div id="omni-results"></div>
+  </div>
+</div>
 
 <!-- AWAITING DATA OVERLAY / HUB -->
 <div id="awaiting-overlay" style="display:none;">
@@ -914,27 +1299,17 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
   </div>
   <div class="dock-divider"></div>
   <div class="dock-section">
-    <div class="dock-item active" id="dock-rotate" title="Toggle Auto-Rotate">
-      <span class="dock-icon">🎥</span>
-      <span class="dock-label" id="label-rotate">Auto-Rotate: ON</span>
-    </div>
-    <div class="dock-item" id="dock-sla" title="SLA &amp; Bottlenecks">
+    <div class="dock-item" id="dock-sla" title="Observability Engine">
       <span class="dock-icon">🔥</span>
-      <span class="dock-label">SLA &amp; Bottlenecks</span>
+      <span class="dock-label">OBSERVABILITY ENGINE</span>
     </div>
-    <div class="dock-item" id="dock-perf" title="Performance 3D Mode">
-      <span class="dock-icon">⏱️</span>
-      <span class="dock-label" id="label-perf">PERFORMANCE 3D: OFF</span>
+    <div class="dock-item" id="dock-architecture" title="Architecture &amp; Volume">
+      <span class="dock-icon">📊</span>
+      <span class="dock-label">ARCHITECTURE &amp; VOLUME</span>
     </div>
-    <div class="dock-item" id="dock-reset" title="Reset Camera View">
-      <span class="dock-icon">🏠</span>
-      <span class="dock-label">RESET VIEW</span>
-    </div>
-  </div>
-  <div class="dock-section bottom">
-    <div class="dock-item ai-item" id="dock-ai" title="AI Agent (Coming Soon)">
-      <span class="dock-icon">✨</span>
-      <span class="dock-label">AI AGENT</span>
+    <div class="dock-item ai-item" id="dock-ai" title="AI Copilot">
+      <span class="dock-icon">🤖</span>
+      <span class="dock-label">AI COPILOT</span>
     </div>
   </div>
 </div>
@@ -949,7 +1324,14 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
         <button id="pm-close">✕</button>
       </div>
     </div>
-    <div id="pm-body"><div id="pm-list"></div></div>
+    <div id="pm-body">
+      <div id="pm-filters">
+        <button class="pm-filter-btn active" id="pm-filter-all">All</button>
+        <button class="pm-filter-btn" id="pm-filter-active">Active</button>
+        <button class="pm-filter-btn" id="pm-filter-inactive">Inactive</button>
+      </div>
+      <div id="pm-list"></div>
+    </div>
   </div>
 </div>
 
@@ -977,6 +1359,18 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
     <div id="sla-close">✕</div>
   </div>
   <div id="sla-body">
+    <div class="sla-section">
+      <div class="sla-label">Performance View</div>
+      <div class="settings-row" style="margin-top:8px; margin-bottom:0;">
+        <div class="settings-name">Performance 3D Mode</div>
+        <label class="switch">
+          <input type="checkbox" id="check-perf-mode">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="sla-desc" style="margin-top:10px;">Enable thermal performance layer and timing labels.</div>
+    </div>
+
     <div class="sla-section">
       <div class="sla-label">Global SLA Threshold</div>
       <div class="sla-row">
@@ -1059,6 +1453,20 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
     </div>
 
     <div class="settings-section">
+      <div class="settings-label">Navigation</div>
+      <div class="settings-row">
+        <div class="settings-name">Auto-Rotate</div>
+        <label class="switch">
+          <input type="checkbox" id="check-auto-rotate" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="sla-desc" style="margin-top:-5px;margin-bottom:20px;">Smooth cinematic orbit around the city</div>
+
+      <button class="settings-action-btn" id="btn-reset-view">RESET VIEW</button>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-label">Post-Processing</div>
       <div class="settings-row">
         <div class="settings-name">Neon Bloom Intensity</div>
@@ -1091,6 +1499,113 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
       </div>
       <div class="sla-desc" style="margin-top:-5px;">Toggle smoke, sparks and fire (Performance)</div>
     </div>
+
+    <div class="settings-section">
+      <div class="settings-label">AI Copilot</div>
+      <div class="settings-name" style="margin-bottom:8px;">OpenAI API Key</div>
+      <input type="password" id="input-openai-key" class="settings-text-input" placeholder="sk-...">
+      <button id="btn-save-openai-key" class="settings-inline-btn">SAVE API KEY</button>
+      <div class="sla-desc" id="openai-key-status" style="margin-top:8px;">Stored locally in this browser.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ARCHITECTURE & VOLUME DRAWER -->
+<div id="architecture-panel">
+  <div id="sla-header">
+    <div id="sla-title">📊 ARCHITECTURE &amp; VOLUME</div>
+    <div id="architecture-close" style="width:32px;height:32px;border-radius:50%;border:1px solid rgba(57,255,20,0.3);background:rgba(57,255,20,0.06);color:var(--green);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;">✕</div>
+  </div>
+  <div id="sla-body">
+    <div class="settings-section">
+      <div class="settings-label" style="color:var(--green)">Data Swell</div>
+
+      <div class="settings-row">
+        <div class="settings-name">ENABLE DATA SWELL (VOLUME 3D)</div>
+        <label class="switch">
+          <input type="checkbox" id="check-data-volume">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="sla-desc" style="margin-top:-5px;">Scale building thickness by selected metric to reveal heavy zones.</div>
+
+      <div id="arch-swell-controls" class="arch-subgroup hidden">
+        <div class="arch-preview">
+          <div class="arch-preview-title">Selected Node Metric</div>
+          <div class="arch-preview-value" id="arch-selected-metric-value">Select a building to inspect metric value.</div>
+        </div>
+
+        <div class="settings-row" style="margin-top:4px;">
+          <div class="settings-name">Auto-Adjust</div>
+          <label class="switch">
+            <input type="checkbox" id="check-auto-threshold" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="sla-desc" id="auto-threshold-hint" style="margin-top:-5px;margin-bottom:10px;">Using project max as threshold.</div>
+
+        <div class="settings-row" style="display:block; margin-top:6px;">
+          <div class="settings-name" style="margin-bottom:8px;">Reference Threshold</div>
+          <input type="number" id="input-reference-threshold" class="arch-number" min="1" step="1" value="1" disabled>
+        </div>
+
+        <div class="settings-row" style="display:block;">
+          <div class="settings-name" style="margin-bottom:8px;">Scale Metric</div>
+          <select id="select-swell-metric" class="arch-select">
+            <option value="rows">Rows</option>
+            <option value="execution_time">Execution Time</option>
+            <option value="code_length">Code Length</option>
+            <option value="connections">Total Connections</option>
+          </select>
+        </div>
+
+        <div class="settings-row" style="margin-top:18px;">
+          <div class="settings-name">Swell Intensity</div>
+          <div class="settings-val" id="val-swell-intensity">1.0x</div>
+        </div>
+        <div class="sla-slider-track">
+          <div class="sla-slider-fill" id="fill-swell-intensity" style="width:20%"></div>
+          <input type="range" class="sla-input" id="input-swell-intensity" min="50" max="300" value="100">
+        </div>
+
+        <div class="settings-row" style="margin-top:16px;">
+          <div class="settings-name">Yellow Threshold</div>
+          <div class="settings-val" id="val-warn-threshold">60%</div>
+        </div>
+        <div class="sla-slider-track">
+          <div class="sla-slider-fill" id="fill-warn-threshold" style="width:60%"></div>
+          <input type="range" class="sla-input" id="input-warn-threshold" min="10" max="95" value="60">
+        </div>
+
+        <div class="settings-row" style="margin-top:12px;">
+          <div class="settings-name">Red Threshold</div>
+          <div class="settings-val" id="val-critical-threshold">100%</div>
+        </div>
+        <div class="sla-slider-track">
+          <div class="sla-slider-fill" id="fill-critical-threshold" style="width:100%"></div>
+          <input type="range" class="sla-input" id="input-critical-threshold" min="20" max="200" value="100">
+        </div>
+
+        <div class="arch-threshold-legend">
+          <div class="legend-row"><span class="dot" style="background:#00f3ff"></span><span id="legend-low-range">&lt; 60% → Cyan</span></div>
+          <div class="legend-row"><span class="dot" style="background:#ffd700"></span><span id="legend-mid-range">60% to 100% → Yellow</span></div>
+          <div class="legend-row"><span class="dot" style="background:#ff4400"></span><span id="legend-high-range">≥ 100% → Red</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- AI COPILOT DRAWER -->
+<div id="ai-panel">
+  <div id="sla-header">
+    <div id="sla-title">🤖 AI COPILOT</div>
+    <div id="ai-close" style="width:32px;height:32px;border-radius:50%;border:1px solid rgba(255,0,255,0.3);background:rgba(255,0,255,0.06);color:var(--magenta);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;">✕</div>
+  </div>
+  <div id="ai-chat-body"></div>
+  <div id="ai-chat-input-row">
+    <input id="ai-chat-input" type="text" placeholder="Ask about SLA risks, bottlenecks, lineage...">
+    <button id="ai-chat-send">SEND</button>
   </div>
 </div>
 
@@ -1120,12 +1635,14 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
 <!-- Three.js CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/renderers/CSS2DRenderer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/postprocessing/EffectComposer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/postprocessing/RenderPass.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/postprocessing/ShaderPass.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/shaders/CopyShader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
 
 <!-- Data injection -->
 <script>

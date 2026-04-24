@@ -8,12 +8,228 @@ import {
 } from './Visualizer.js';
 import { VFXManager } from './VFXManager.js';
 
+// CSS2DRenderer para etiquetas flotantes de volumen de datos
+let labelRenderer = null;
+
 let vfxManager = null;
 const clock = new THREE.Clock();
 
 
 // ── Constants ──────────────────────────────────────────
 export const LAYER_X = { source: -300, staging: -100, intermediate: 100, mart: 300, consumption: 500, default: 650 };
+
+// ── Data Volume Scaling ───────────────────────────────
+const CRITICAL_VOLUME_THRESHOLD = 100000000; // 100M filas
+const LOG_SCALE_FACTOR = 0.3; // Factor de escalado logarítmico
+
+function toPositiveNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function resolveRowMetric(n) {
+  const direct =
+    toPositiveNumber(n.row_count) ||
+    toPositiveNumber(n.rows) ||
+    toPositiveNumber(n.num_rows) ||
+    toPositiveNumber(n.rowCount) ||
+    toPositiveNumber(n.stats?.row_count) ||
+    toPositiveNumber(n.stats?.rows) ||
+    toPositiveNumber(n.stats?.num_rows) ||
+    toPositiveNumber(n.meta?.row_count) ||
+    toPositiveNumber(n.meta?.rows) ||
+    toPositiveNumber(n.meta?.num_rows);
+
+  if (direct > 0) return { rows: Math.round(direct), estimated: false };
+
+  const cols = Math.max(1, (n.columns || []).length || 0);
+  const deps = ((n.upstream || []).length + (n.downstream || []).length);
+  const nameFactor = Math.max(1, (n.name || '').length);
+  const estimatedRows = Math.max(
+    1000,
+    Math.round((cols * 12000) + (deps * 26000) + (nameFactor * 350))
+  );
+  return { rows: estimatedRows, estimated: true };
+
+}
+
+function resolveSwellMetricValue(n, ud, metric) {
+  if (metric === 'rows') {
+    const { rows } = resolveRowMetric(n);
+    return Math.max(1, rows);
+  }
+
+  if (metric === 'code_length') {
+    const directCode =
+      toPositiveNumber(n.code_length) ||
+      toPositiveNumber(n.sql_length) ||
+      toPositiveNumber(n.stats?.code_length) ||
+      toPositiveNumber(n.meta?.code_length);
+    if (directCode > 0) return directCode;
+    const cols = toPositiveNumber((n.columns || []).length);
+    return Math.max(1, (cols * 2500) + ((n.name || '').length * 500));
+  }
+
+  if (metric === 'connections') {
+    const deps = ((n.upstream || []).length + (n.downstream || []).length);
+    return Math.max(1, deps * 50000);
+  }
+
+  // Default: execution_time (mapped to larger domain for stable log scaling)
+  const exec = toPositiveNumber(n.execution_time);
+  return Math.max(1, exec * 100000);
+}
+
+function getSwellScaleForNode(n, ud) {
+  const metric = State.dataSwellMetric || 'execution_time';
+  const intensity = Math.max(0.5, Math.min(3.0, Number(State.dataSwellIntensity) || 1.0));
+  const metricValue = resolveSwellMetricValue(n, ud, metric);
+  const userDefinedThreshold = Math.max(
+    1,
+    Number(State.referenceThreshold || State.autoMaxThreshold || 1)
+  );
+
+  const weight = Math.min(metricValue / userDefinedThreshold, 1.0);
+  const finalWeight = Math.sqrt(weight);
+  const blendedWeight = (weight * 0.3) + (finalWeight * 0.7);
+
+  const metricProfile = {
+    rows: { gamma: 0.72, widthGain: 2.55, heightGain: 0.92 },
+    execution_time: { gamma: 0.95, widthGain: 1.75, heightGain: 0.58 },
+    code_length: { gamma: 0.82, widthGain: 2.15, heightGain: 0.70 },
+    connections: { gamma: 0.78, widthGain: 2.30, heightGain: 0.76 },
+  }[metric] || { gamma: 0.82, widthGain: 2.10, heightGain: 0.70 };
+
+  const profiledWeight = Math.pow(Math.max(0, blendedWeight), metricProfile.gamma);
+
+  const widthScale = 1.0 + (profiledWeight * intensity * metricProfile.widthGain);
+  const heightScale = 1.0 + (profiledWeight * intensity * metricProfile.heightGain);
+
+  return {
+    widthScale: Math.max(1.0, Math.min(widthScale, 12.0)),
+    heightScale: Math.max(1.0, Math.min(heightScale, 4.5)),
+    weight: profiledWeight,
+  };
+}
+
+function getSwellThresholdRatios() {
+  const warnPct = Math.max(10, Math.min(95, Number(State.swellWarnThresholdPct) || 60));
+  const criticalPct = Math.max(warnPct + 1, Math.min(200, Number(State.swellCriticalThresholdPct) || 100));
+  return { warnRatio: warnPct / 100, criticalRatio: criticalPct / 100 };
+}
+
+function getSwellSeverity(n, ud) {
+  const metric = State.dataSwellMetric || 'execution_time';
+  const metricValue = resolveSwellMetricValue(n, ud, metric);
+  const threshold = Math.max(1, Number(State.referenceThreshold || State.autoMaxThreshold || 1));
+  const ratio = metricValue / threshold;
+  const { warnRatio, criticalRatio } = getSwellThresholdRatios();
+
+  if (ratio >= criticalRatio) return { level: 'high', ratio };
+  if (ratio >= warnRatio) return { level: 'mid', ratio };
+  return { level: 'low', ratio };
+}
+
+function getSeverityStyle(level) {
+  if (level === 'high') {
+    return {
+      color: '#ff4400',
+      borderColor: '#ff4400',
+      boxShadow: '0 0 10px rgba(255,68,0,0.5)',
+      textShadow: '0 0 5px rgba(255,68,0,0.5)',
+    };
+  }
+  if (level === 'mid') {
+    return {
+      color: '#ffd700',
+      borderColor: '#ffd700',
+      boxShadow: '0 0 10px rgba(255,215,0,0.45)',
+      textShadow: '0 0 5px rgba(255,215,0,0.45)',
+    };
+  }
+  return {
+    color: '#00f3ff',
+    borderColor: '#00f3ff',
+    boxShadow: '0 0 10px rgba(0,243,255,0.3)',
+    textShadow: '0 0 5px rgba(0,243,255,0.5)',
+  };
+}
+
+function formatCompactNumber(value) {
+  if (!value || value < 0) return '0';
+  if (value >= 1000000000) return (value / 1000000000).toFixed(1) + 'B';
+  if (value >= 1000000) return (value / 1000000).toFixed(1) + 'M';
+  if (value >= 1000) return (value / 1000).toFixed(1) + 'k';
+  return Math.round(value).toString();
+}
+
+function formatSwellLabel(n, ud) {
+  const metric = State.dataSwellMetric || 'execution_time';
+
+  if (metric === 'rows') {
+    const { rows, estimated } = resolveRowMetric(n);
+    const base = formatRowCount(rows);
+    return estimated ? `~${base}` : `✓${base}`;
+  }
+
+  if (metric === 'code_length') {
+    const value = resolveSwellMetricValue(n, ud, metric);
+    return `${formatCompactNumber(value)} code`;
+  }
+
+  if (metric === 'connections') {
+    const deps = ((n.upstream || []).length + (n.downstream || []).length);
+    return `${deps} links`;
+  }
+
+  const exec = toPositiveNumber(n.execution_time);
+  return `${exec.toFixed(2)}s`;
+}
+
+/**
+ * Calcula la escala normalizada usando escalado logarítmico.
+ * Esto asegura que tablas de 1B de filas no rompan la cámara 
+ * y las de 1k sean visibles.
+ * @param {number} value - Valor numérico (ej. número de filas)
+ * @param {string} metricType - Tipo de métrica ('rows', 'bytes', etc.)
+ * @returns {number} - Factor de escala
+ */
+export function getNormalizedScale(value, metricType = 'rows') {
+  if (!value || value <= 0) return 1.0;
+  
+  // Escalado logarítmico: scale = Math.log10(value + 1) * factor
+  const scale = Math.log10(value + 1) * LOG_SCALE_FACTOR;
+  
+  // Clamp para evitar extremos
+  return Math.max(1.08, Math.min(scale, 8.0));
+}
+
+/**
+ * Formatea el número de filas para mostrar (ej. "1.2M rows", "450k rows")
+ * @param {number} rows - Número de filas
+ * @returns {string} - Texto formateado
+ */
+export function formatRowCount(rows) {
+  if (!rows || rows < 0) return '0 rows';
+  
+  if (rows >= 1000000000) {
+    return (rows / 1000000000).toFixed(1) + 'B rows';
+  } else if (rows >= 1000000) {
+    return (rows / 1000000).toFixed(1) + 'M rows';
+  } else if (rows >= 1000) {
+    return (rows / 1000).toFixed(1) + 'k rows';
+  }
+  return rows + ' rows';
+}
+
+/**
+ * Verifica si el volumen es crítico (>100M filas)
+ * @param {number} rows - Número de filas
+ * @returns {boolean}
+ */
+export function isCriticalVolume(rows) {
+  return rows > CRITICAL_VOLUME_THRESHOLD;
+}
 
 // ── Shared mutable state (city runtime) ───────────────
 export const meshes = [];
@@ -201,7 +417,20 @@ export function calcHeight(n, perf) {
 export function buildBuilding(n) {
   const col = n.color || '#ffffff', emis = n.emissive || '#000000';
   const h = calcHeight(n, false), ph = calcHeight(n, true);
-  const w = 13, d = 13;
+  
+  // Calcular escala basada en volumen de datos (para modo Data Swell)
+  const { rows: rowCount, estimated: rowCountEstimated } = resolveRowMetric(n);
+  const swellScale = getSwellScaleForNode(n, null);
+  const volumeScale = swellScale.widthScale;
+  const severity = getSwellSeverity(n, null);
+  const isCritical = severity.level === 'high';
+  
+  // Ancho y profundidad base
+  const baseW = 13, baseD = 13;
+  // En modo Data Swell, X y Z se escalan por volumen, Y (altura) permanece igual
+  const w = baseW, d = baseD;
+  const swellW = baseW * volumeScale;
+  const swellD = baseD * volumeScale;
 
   const ftex  = makeFaceTex(n.name, col, n.layer || 'default');
   const sideM = new THREE.MeshStandardMaterial({color:col,emissive:emis,emissiveIntensity:0.1,roughness:0.45,metalness:0.6});
@@ -224,7 +453,11 @@ export function buildBuilding(n) {
   scene.add(voxel); voxels.push(voxel);
 
   mesh.visible = false;
-  mesh.userData = { node:n, baseH:h, perfH:ph, targetH:h, currentH:h, baseEmis:emis, voxel };
+  mesh.userData = { 
+    node:n, baseH:h, perfH:ph, targetH:h, currentH:h, baseEmis:emis, voxel,
+    volumeScale, swellW, swellD, baseW, baseD, rowCount, rowCountEstimated, isCritical,
+    swellHeightScale: swellScale.heightScale
+  };
 
   if (n.is_dead_end) { const hazard = makeHazardSprite(); mesh.add(hazard); mesh.userData.hazard = hazard; hazard.visible = !State.perfMode; }
 
@@ -250,6 +483,49 @@ export function buildBuilding(n) {
   const timeSp = makeTimeSprite(`${n.execution_time.toFixed(2)}s`, n.is_bottleneck);
   timeSp.position.set(0, h + 25, 0); timeSp.visible = false; timeSp.name = 'timeLabel';
   mesh.add(timeSp); mesh.userData.timeLabel = timeSp;
+
+  // ── Data Volume Label (CSS2DObject) ────────────────────
+  const volumeDiv = document.createElement('div');
+  volumeDiv.className = 'data-volume-label';
+  volumeDiv.textContent = formatSwellLabel(n, null);
+  const initialStyle = getSeverityStyle(severity.level);
+  volumeDiv.style.cssText = `
+    background: rgba(0,0,0,0.7);
+    color: ${initialStyle.color};
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    font-weight: bold;
+    border: 1px solid ${initialStyle.borderColor};
+    box-shadow: ${initialStyle.boxShadow};
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+    white-space: nowrap;
+    text-shadow: ${initialStyle.textShadow};
+  `;
+  
+  const CSS2DObject = window.CSS2DObject || (THREE.CSS2DObject);
+  if (CSS2DObject) {
+    const volumeLabel = new CSS2DObject(volumeDiv);
+    volumeLabel.position.set(0, h + 24, 0);
+    volumeLabel.name = 'volumeLabel';
+    mesh.add(volumeLabel);
+    mesh.userData.volumeLabel = volumeLabel;
+    mesh.userData.volumeDiv = volumeDiv;
+    mesh.userData.volumeLabelOffset = 28;
+    mesh.userData.lastSwellMetric = State.dataSwellMetric || 'execution_time';
+    mesh.userData.lastSwellSeverity = severity.level;
+  }
+
+  // ── Critical Volume Pulse Effect (dynamic severity) ───
+  const pulseLight = new THREE.PointLight(0xff4400, 2.0, 40);
+  pulseLight.position.set(0, 2, 0);
+  pulseLight.name = 'pulseLight';
+  pulseLight.visible = false;
+  mesh.add(pulseLight);
+  mesh.userData.pulseLight = pulseLight;
 
   mesh.scale.y = 0;
   scene.add(mesh); meshes.push(mesh); nodeMeshMap[n.id] = mesh;
@@ -345,53 +621,85 @@ export function updateFires() {
 
 // ── Selection ──────────────────────────────────────────
 export function applySelection(node) {
+  const blastMode = !!State.blastRadiusSourceId && Array.isArray(State.blastRadiusIds) && State.blastRadiusIds.length > 0;
+  const blastSet = blastMode ? new Set(State.blastRadiusIds) : new Set();
+  const blastSourceId = blastMode ? State.blastRadiusSourceId : null;
+  let focusNode = node;
+
+  if (blastMode && blastSourceId && nodeMap[blastSourceId]) {
+    focusNode = nodeMap[blastSourceId];
+  }
+
   critSet = new Set();
-  State.set('selectedNode', node);
-  const highlightColor = node ? new THREE.Color(node.color) : new THREE.Color(0x00d4e8);
+  State.set('selectedNode', focusNode);
+  const highlightColor = focusNode ? new THREE.Color(focusNode.color) : new THREE.Color(0x00d4e8);
   
   let ancSet = new Set(), descSet = new Set();
-  if (node) {
-    const sets = getLineageSets(node.id);
-    ancSet = sets.ancestors;
-    descSet = sets.descendants;
-    critSet = new Set([...ancSet, ...descSet]);
+  if (focusNode) {
+    if (blastMode) {
+      critSet = new Set(blastSet);
+    } else {
+      const sets = getLineageSets(focusNode.id);
+      ancSet = sets.ancestors;
+      descSet = sets.descendants;
+      critSet = new Set([...ancSet, ...descSet]);
+    }
   }
 
   meshes.forEach(m => {
     const n = m.userData.node; if (!n) return;
     const id = n.id;
-    const inSet = node ? critSet.has(id) : true;
+    const inSet = focusNode ? critSet.has(id) : true;
+    const isBlastSource = blastMode && blastSourceId === id;
     m.children.forEach(child => {
       // GHOST MODE: Subtle outlines and labels for reference
-      if (child.isLineSegments) child.material.opacity = inSet ? 0.9 : 0.05;
-      if (child.isLight)  child.intensity = inSet ? (node && id===node.id ? 5.0 : 1.5) : 0.0;
-      if (child.isSprite) child.material.opacity = inSet ? 1.0 : 0.08;
+      if (child.isLineSegments) child.material.opacity = inSet ? (isBlastSource ? 1.0 : 0.92) : (blastMode ? 0.03 : 0.05);
+      if (child.isLight)  child.intensity = inSet ? (isBlastSource ? 6.2 : 2.0) : 0.0;
+      if (child.isSprite) child.material.opacity = inSet ? 1.0 : (blastMode ? 0.03 : 0.08);
     });
   });
   edgeObjs.forEach(e => {
     // CRITICAL FIX: Only light edges that DIRECTLY TOUCH the selected cube
-    const inPath = node ? (e.src === node.id || e.tgt === node.id) : true;
+    const inPath = blastMode
+      ? (blastSet.has(e.src) && blastSet.has(e.tgt))
+      : (focusNode ? (e.src === focusNode.id || e.tgt === focusNode.id) : true);
     
     const ghostColor = new THREE.Color(0x0a1114);
+    const blastColor = new THREE.Color(0xff4400);
     const defaultColor = new THREE.Color(e.isInterIsland ? 0xffdf00 : 0x0a3344);
     
-    e.line.material.opacity   = node ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : 0.0) : (e.isInterIsland ? 0.8 : 0.45);
-    e.line.material.color.copy(node ? (inPath ? highlightColor : ghostColor) : defaultColor);
+    e.line.material.opacity   = focusNode ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : (blastMode ? 0.0 : 0.0)) : (e.isInterIsland ? 0.8 : 0.45);
+    e.line.material.color.copy(focusNode ? (inPath ? (blastMode ? blastColor : highlightColor) : ghostColor) : defaultColor);
     e.line.renderOrder = inPath ? 10 : 0;
     
     e.particles.forEach(p => {
-      p.material.opacity = node ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : 0.0) : (e.isInterIsland ? 0.8 : 0.25);
-      p.material.color.copy(node && inPath ? highlightColor : new THREE.Color(0xffffff));
-      p.scale.setScalar(inPath && node ? 2.5 : 1.0);
+      p.material.opacity = focusNode ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : 0.0) : (e.isInterIsland ? 0.8 : 0.25);
+      p.material.color.copy(focusNode && inPath ? (blastMode ? blastColor : highlightColor) : new THREE.Color(0xffffff));
+      p.scale.setScalar(inPath && focusNode ? 2.5 : 1.0);
     });
   });
-  State.set('selectedNode', node);
+  State.set('selectedNode', focusNode);
 }
 
 export function resetSelection() {
+  State.set('blastRadiusSourceId', null);
+  State.set('blastRadiusIds', []);
   critSet = new Set();
   applySelection(null);
   edgeObjs.forEach(e => e.particles.forEach(p => { p.material.opacity = 0.25; p.scale.setScalar(1.0); }));
+}
+
+export function applyBlastRadius(sourceId, impactedIds) {
+  if (!sourceId || !Array.isArray(impactedIds) || !impactedIds.length) {
+    State.set('blastRadiusSourceId', null);
+    State.set('blastRadiusIds', []);
+    applySelection(State.selectedNode || null);
+    return;
+  }
+  State.set('blastRadiusSourceId', sourceId);
+  State.set('blastRadiusIds', impactedIds);
+  const sourceNode = nodeMap[sourceId] || State.selectedNode;
+  applySelection(sourceNode || null);
 }
 
 // ── Camera Tween ───────────────────────────────────────
@@ -402,6 +710,24 @@ export function tweenCamera(to, toTarget, dur=1200) {
     et: new THREE.Vector3(toTarget.x, toTarget.y, toTarget.z),
     start: performance.now(), dur
   };
+}
+
+export function flyToNode(nodeNameOrId) {
+  if (!nodeNameOrId) return;
+  const key = String(nodeNameOrId).toLowerCase();
+  const targetNode = Object.values(nodeMap).find((n) => {
+    return String(n.id).toLowerCase() === key || String(n.name).toLowerCase() === key;
+  });
+  if (!targetNode) return;
+
+  const targetMesh = nodeMeshMap[targetNode.id];
+  if (!targetMesh || !controls || !camera) return;
+
+  applySelection(targetNode);
+  const buildingPos = targetMesh.position.clone();
+  const currentDir = camera.position.clone().sub(controls.target).normalize();
+  const destPos = buildingPos.clone().add(currentDir.multiplyScalar(140));
+  tweenCamera(destPos, buildingPos.clone().add(new THREE.Vector3(0, 12, 0)), 1100);
 }
 
 // ── Rebuild City ───────────────────────────────────────
@@ -611,6 +937,11 @@ export function startAnimationLoop() {
       const isBottleneck = n.is_bottleneck;
 
       // Height tween
+      const baseTargetH = State.perfMode ? ud.perfH : ud.baseH;
+      const dynamicScale = getSwellScaleForNode(n, ud);
+      const targetHeightScale = State.dataVolumeMode ? dynamicScale.heightScale : 1.0;
+      ud.targetH = baseTargetH * targetHeightScale;
+
       const hDiff = ud.targetH - ud.currentH;
       if (Math.abs(hDiff) > 0.01) ud.currentH += hDiff * 0.08;
       else ud.currentH = ud.targetH;
@@ -649,17 +980,28 @@ export function startAnimationLoop() {
 
       const label = ud.label;
       if (label) {
+        const safeSX = Math.max(0.001, m.scale.x || 1);
         const safeSY = Math.max(0.001, sY);
         label.position.y = ud.baseH + (12 / safeSY);
         const ratio = label.userData.ratio || 4;
-        label.scale.set(13 * ratio, 13 / safeSY, 1);
+        label.scale.set((13 * ratio) / safeSX, 13 / safeSY, 1);
         const distToLabel = camera.position.distanceTo(m.position);
-        if (distToLabel > 850) { label.visible = false; }
-        else {
-          label.visible = (sY > 0.1) && m.visible;
-          const tFade = Math.min(1, Math.max(0, (distToLabel - 550) / 300));
-          label.material.opacity = 1.0 - (tFade * tFade * (3 - 2 * tFade));
+        const labelsEnabled = !!State.showLabels;
+        const ghostVisible = !labelsEnabled && !!ud.isHovered;
+        let targetOpacity = 0;
+
+        if (labelsEnabled) {
+          if (distToLabel <= 850 && sY > 0.1 && m.visible) {
+            const tFade = Math.min(1, Math.max(0, (distToLabel - 550) / 300));
+            targetOpacity = 1.0 - (tFade * tFade * (3 - 2 * tFade));
+          }
+        } else if (ghostVisible && sY > 0.1 && m.visible) {
+          targetOpacity = 1.0;
         }
+
+        const currentOpacity = Number(label.material.opacity) || 0;
+        label.material.opacity = currentOpacity + (targetOpacity - currentOpacity) * 0.2;
+        label.visible = (sY > 0.1) && m.visible && (label.material.opacity > 0.03);
       }
 
       m.position.set(n.x, 0, n.z);
@@ -709,27 +1051,96 @@ export function startAnimationLoop() {
         const dist = camera.position.distanceTo(m.position);
         const isSelected = (State.selectedNode && State.selectedNode.id === n.id);
         const inFocus = (!State.selectedNode || critSet.has(n.id));
+        const labelsEnabled = !!State.showLabels;
+        const ghostVisible = !labelsEnabled && !!ud.isHovered;
         
         // Time labels only show in Performance Mode. 
         // We show all of them if close, plus bottlenecks from far away.
-        const shouldShow = State.perfMode && (isBottleneck || dist < 2500 || isSelected);
+        const shouldShow = labelsEnabled
+          ? (State.perfMode && (isBottleneck || dist < 2500 || isSelected))
+          : (State.perfMode && ghostVisible);
 
         if (shouldShow && inFocus) {
-          timeLabel.visible = true;
+          const safeSX = Math.max(0.001, m.scale.x || 1);
           const safeSY = Math.max(0.001, sY);
           const yOff = isGhost ? 30 : (isBottleneck ? 42 : 28);
           timeLabel.position.y = ud.baseH + (yOff / safeSY);
           const baseW = isBottleneck ? 55 : 36, baseHt = isBottleneck ? 22 : 14.4;
-          timeLabel.scale.set(baseW, baseHt / safeSY, 1);
+          timeLabel.scale.set(baseW / safeSX, baseHt / safeSY, 1);
+          let targetOpacity = 1.0;
           if (isBottleneck) {
             const flash = (Math.sin(t * 10) + 1) / 2;
-            timeLabel.material.opacity = 0.7 + flash * 0.3;
+            targetOpacity = 0.7 + flash * 0.3;
           } else {
-            timeLabel.material.opacity = Math.min(1.0, (800 - dist) / 150);
+            targetOpacity = ghostVisible ? 1.0 : Math.min(1.0, (800 - dist) / 150);
           }
+          const currentOpacity = Number(timeLabel.material.opacity) || 0;
+          timeLabel.material.opacity = currentOpacity + (targetOpacity - currentOpacity) * 0.2;
+          timeLabel.visible = timeLabel.material.opacity > 0.03;
         } else {
-          timeLabel.visible = false;
+          const currentOpacity = Number(timeLabel.material.opacity) || 0;
+          timeLabel.material.opacity = currentOpacity * 0.8;
+          timeLabel.visible = timeLabel.material.opacity > 0.03;
         }
+      }
+
+      // ── Data Volume Mode: Scaling X/Z (width/depth) ─────
+      if (ud.swellW && ud.swellD) {
+        const targetScaleX = State.dataVolumeMode ? dynamicScale.widthScale : 1.0;
+        const targetScaleZ = State.dataVolumeMode ? dynamicScale.widthScale : 1.0;
+        
+        // Lerp suave para animación
+        const currentScaleX = m.scale.x || 1.0;
+        const currentScaleZ = m.scale.z || 1.0;
+        const lerpFactor = 0.08;
+        
+        m.scale.x += (targetScaleX - currentScaleX) * lerpFactor;
+        m.scale.z += (targetScaleZ - currentScaleZ) * lerpFactor;
+      }
+
+      // ── Data Volume Labels Visibility ──────────────────
+      if (ud.volumeLabel && ud.volumeDiv) {
+        const labelsEnabled = !!State.showLabels;
+        const ghostVisible = !labelsEnabled && !!ud.isHovered;
+        const shouldShowLabel = (State.dataVolumeMode && m.visible && sY > 0.1) && (labelsEnabled || ghostVisible);
+
+        const currentOpacity = Number(ud.volumeDiv.style.opacity || 0);
+        const targetOpacity = shouldShowLabel ? 1 : 0;
+        const nextOpacity = currentOpacity + (targetOpacity - currentOpacity) * 0.25;
+        ud.volumeDiv.style.opacity = String(Math.max(0, Math.min(1, nextOpacity)));
+        ud.volumeLabel.visible = m.visible && sY > 0.1 && nextOpacity > 0.03;
+
+        const currentMetric = State.dataSwellMetric || 'execution_time';
+        const severityNow = getSwellSeverity(n, ud);
+        const severityChanged = ud.lastSwellSeverity !== severityNow.level;
+        if (ud.lastSwellMetric !== currentMetric || shouldShowLabel) {
+          ud.volumeDiv.textContent = formatSwellLabel(n, ud);
+          ud.lastSwellMetric = currentMetric;
+        }
+        if (severityChanged || shouldShowLabel) {
+          const style = getSeverityStyle(severityNow.level);
+          ud.volumeDiv.style.color = style.color;
+          ud.volumeDiv.style.borderColor = style.borderColor;
+          ud.volumeDiv.style.boxShadow = style.boxShadow;
+          ud.volumeDiv.style.textShadow = style.textShadow;
+          ud.lastSwellSeverity = severityNow.level;
+        }
+        
+        // Posicionar por encima del label de nombre para evitar solapamiento
+        const safeSY = Math.max(0.001, sY);
+        const volumeOffset = ud.volumeLabelOffset || 28;
+        ud.volumeLabel.position.y = ud.baseH + (volumeOffset / safeSY);
+      }
+
+      // ── Critical Volume Pulse Effect ─────────────────────
+      const pulseSeverity = getSwellSeverity(n, ud).level;
+      if (ud.pulseLight && State.dataVolumeMode && pulseSeverity === 'high') {
+        ud.pulseLight.visible = true;
+        // Pulso de luz tenue: intensidad oscila entre 0.5 y 2.0
+        const pulseIntensity = 1.25 + Math.sin(t * 3) * 0.75;
+        ud.pulseLight.intensity = pulseIntensity;
+      } else if (ud.pulseLight) {
+        ud.pulseLight.visible = false;
       }
 
       if (vfxManager) {
@@ -746,6 +1157,12 @@ export function startAnimationLoop() {
     });
 
     controls.update();
+    
+    // Renderizado CSS2D para etiquetas de volumen
+    if (labelRenderer) {
+      labelRenderer.render(scene, camera);
+    }
+    
     if (composer) {
       composer.render();
     } else {
@@ -759,3 +1176,41 @@ function _dzHideOverlay() {
   if (window._dzHideOverlay) return window._dzHideOverlay();
   return Promise.resolve();
 }
+
+// ── Data Volume Mode: CSS2DRenderer Init ───────────────
+/**
+ * Inicializa el CSS2DRenderer para etiquetas flotantes de volumen
+ * @param {HTMLElement} container - Contenedor DOM
+ */
+export function initLabelRenderer(container) {
+  if (!container) return;
+  
+  const CSS2DRenderer = window.CSS2DRenderer || (THREE.CSS2DRenderer);
+  if (!CSS2DRenderer) {
+    console.warn('[CityEngine] CSS2DRenderer no disponible. Las etiquetas de volumen no se mostrarán.');
+    return;
+  }
+  
+  labelRenderer = new CSS2DRenderer();
+  labelRenderer.setSize(window.innerWidth, window.innerHeight);
+  labelRenderer.domElement.style.position = 'absolute';
+  labelRenderer.domElement.style.top = '0';
+  labelRenderer.domElement.style.left = '0';
+  labelRenderer.domElement.style.pointerEvents = 'none';
+  labelRenderer.domElement.style.zIndex = '100';
+  container.appendChild(labelRenderer.domElement);
+  
+  console.log('[CityEngine] CSS2DRenderer inicializado para etiquetas de volumen.');
+}
+
+/**
+ * Actualiza el tamaño del label renderer en resize
+ */
+export function updateLabelRendererSize() {
+  if (labelRenderer) {
+    labelRenderer.setSize(window.innerWidth, window.innerHeight);
+  }
+}
+
+// Listener para resize
+window.addEventListener('resize', updateLabelRendererSize);

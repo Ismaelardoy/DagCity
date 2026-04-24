@@ -10,7 +10,8 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 # Local imports
-from core.config import EXTERNAL_MANIFEST_PATH, PORT, VIZ_DIR, PROJECTS_DIR, WORKSPACE_PATH, is_live_sync_available
+import core.config as config
+from core.config import PORT, VIZ_DIR, PROJECTS_DIR, WORKSPACE_PATH, is_live_sync_available
 from core.parser import ManifestParser
 from core.generator import VizGenerator
 from core.watcher import ManifestWatcher
@@ -31,6 +32,34 @@ def _set_workspace_active_project(name: str):
         with open(WORKSPACE_PATH, "w") as f:
             json.dump({"active_project": name}, f)
     except: pass
+
+def _current_live_project_name() -> Optional[str]:
+    if not is_live_sync_available():
+        return None
+    try:
+        with open(config.EXTERNAL_MANIFEST_PATH) as f:
+            manifest = json.load(f)
+        name = manifest.get("metadata", {}).get("project_name")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name.strip())
+        return safe[:64]
+    except Exception:
+        return None
+
+def _is_project_startup_loadable(project_name: str) -> bool:
+    meta_path = os.path.join(PROJECTS_DIR, project_name, "meta.json")
+    if not os.path.exists(meta_path):
+        return True
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+    except Exception:
+        return True
+    if meta.get("source") != "live_sync":
+        return True
+    current_live = _current_live_project_name()
+    return bool(current_live and current_live == project_name)
 
 app = FastAPI(title="DagCity API", version="5.0")
 
@@ -78,7 +107,7 @@ async def get_status():
     return {
         "version": "5.1",
         "live_sync_available": is_live_sync_available(),
-        "external_path": EXTERNAL_MANIFEST_PATH if is_live_sync_available() else None,
+        "external_path": config.EXTERNAL_MANIFEST_PATH if is_live_sync_available() else None,
         "projects_count": len(os.listdir(PROJECTS_DIR)) if os.path.exists(PROJECTS_DIR) else 0
     }
 
@@ -86,8 +115,8 @@ async def get_status():
 async def check_local():
     """One-Click Live Sync: checks if manifest.json is present at the mounted volume path."""
     if is_live_sync_available():
-        return {"status": "ready", "path": EXTERNAL_MANIFEST_PATH}
-    return {"status": "missing", "path": EXTERNAL_MANIFEST_PATH}
+        return {"status": "ready", "path": config.EXTERNAL_MANIFEST_PATH}
+    return {"status": "missing", "path": config.EXTERNAL_MANIFEST_PATH}
 
 @app.post("/api/launch-local")
 async def launch_local():
@@ -97,14 +126,14 @@ async def launch_local():
     try:
         # 1. Parse from external volume
         # Check for run_results.json in the same target folder
-        run_results_path = EXTERNAL_MANIFEST_PATH.replace("manifest.json", "run_results.json")
+        run_results_path = config.EXTERNAL_MANIFEST_PATH.replace("manifest.json", "run_results.json")
         rr_dict = None
         if os.path.exists(run_results_path):
             with open(run_results_path) as f: rr_dict = json.load(f)
         
-        with open(EXTERNAL_MANIFEST_PATH) as f: m_dict = json.load(f)
+        with open(config.EXTERNAL_MANIFEST_PATH) as f: m_dict = json.load(f)
         
-        parser = ManifestParser(EXTERNAL_MANIFEST_PATH)
+        parser = ManifestParser(config.EXTERNAL_MANIFEST_PATH)
         graph_data = parser.parse()
         
         # 2. Auto-persist internally so we can save SLAs etc.
@@ -148,7 +177,7 @@ async def launch_local():
                 "node_count": len(graph_data.get("nodes", [])),
                 "created_at": datetime.now().isoformat(),
                 "source": "live_sync",
-                "original_path": EXTERNAL_MANIFEST_PATH
+                "original_path": config.EXTERNAL_MANIFEST_PATH
             }, f)
             
         _set_workspace_active_project(project_name)
@@ -246,7 +275,7 @@ async def startup_event():
     
     if active_project:
         graph_path = os.path.join(PROJECTS_DIR, active_project, "graph.json")
-        if os.path.exists(graph_path):
+        if os.path.exists(graph_path) and _is_project_startup_loadable(active_project):
             print(f"[*] Auto-loading last active project: {active_project}")
             with open(graph_path) as f:
                 graph_data = json.load(f)
@@ -254,6 +283,8 @@ async def startup_event():
             if os.path.exists(sla_path):
                 with open(sla_path) as f:
                     graph_data["_sla"] = json.load(f)
+        else:
+            _set_workspace_active_project(None)
     
     if not graph_data:
         graph_data = _get_current_graph()
@@ -266,15 +297,19 @@ async def startup_event():
     loop = asyncio.get_running_loop()
     
     # 3. Initialize Live Sync (Volume Watcher)
-    # We watch the entire /data directory to cover both internal projects and the mounted volume
-    watch_root = "/data" if os.path.exists("/data") else PROJECTS_DIR
-    
+    if is_live_sync_available():
+        watch_root = os.path.dirname(config.EXTERNAL_MANIFEST_PATH)
+        watch_recursive = False
+    else:
+        watch_root = PROJECTS_DIR
+        watch_recursive = True
+
     watcher_obj = ManifestWatcher(watch_root, loop)
-    watcher_obj.start(recursive=True)
+    watcher_obj.start(recursive=watch_recursive)
     
     streamer.watcher_instance = watcher_obj
     if is_live_sync_available():
-        print(f"[+] Live Sync ACTIVE. Watching external volume: {EXTERNAL_MANIFEST_PATH}")
+        print(f"[+] Live Sync ACTIVE. Watching external volume: {config.EXTERNAL_MANIFEST_PATH}")
     else:
         print(f"[+] Live Sync IDLE (No volume discovered). Watching internal store: {PROJECTS_DIR}")
 

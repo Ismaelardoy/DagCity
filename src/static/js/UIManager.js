@@ -4,10 +4,12 @@
 import { State } from './State.js';
 import {
   meshes, nodeMeshMap, edgeObjs, nodeMap,
-  applySelection, resetSelection, tweenCamera, updateFires, rebuildCity,
+  applySelection, applyBlastRadius, resetSelection, tweenCamera, updateFires, rebuildCity, flyToNode,
   makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics
 } from './CityEngine.js';
 import { controls, camera, INIT_CAM, composer } from './Visualizer.js';
+import { aiClient } from './AIClient.js';
+import { focusNode2D } from './DAGView2D.js';
 
 
 // ── Sidebar ────────────────────────────────────────────
@@ -16,6 +18,75 @@ const sbContent = document.getElementById('sb-content');
 
 let isSlaPanelOpen = false;
 let isSettingsOpen = false;
+let isArchitectureOpen = false;
+let isAiPanelOpen = false;
+const aiHistory = [];
+
+function calculateImpact(nodeId, visited = new Set()) {
+  if (!nodeId || visited.has(nodeId)) return { impactedIds: [], exposuresImpacted: [] };
+  visited.add(nodeId);
+
+  const node = nodeMap[nodeId] || (State.raw?.nodes || []).find(n => n.id === nodeId);
+  if (!node) return { impactedIds: [], exposuresImpacted: [] };
+
+  const impacted = [];
+  const exposures = [];
+  const downstream = node.downstream || [];
+
+  downstream.forEach((childId) => {
+    if (visited.has(childId)) return;
+    const child = nodeMap[childId] || (State.raw?.nodes || []).find(n => n.id === childId);
+    if (!child) return;
+
+    impacted.push(childId);
+
+    const tags = (child.tags || []).map(t => String(t).toLowerCase());
+    const nameLower = String(child.name || '').toLowerCase();
+    const exposureLike =
+      child.resource_type === 'exposure' ||
+      nameLower.includes('dashboard') ||
+      nameLower.includes('report') ||
+      tags.includes('dashboard') ||
+      tags.includes('exposure') ||
+      tags.includes('report') ||
+      (!child.downstream || child.downstream.length === 0);
+
+    if (exposureLike) exposures.push(childId);
+
+    const nested = calculateImpact(childId, visited);
+    impacted.push(...nested.impactedIds);
+    exposures.push(...nested.exposuresImpacted);
+  });
+
+  return {
+    impactedIds: [...new Set(impacted)],
+    exposuresImpacted: [...new Set(exposures)],
+  };
+}
+
+function setPerfModeEnabled(enabled) {
+  State.set('perfMode', !!enabled);
+  const perfCheck = document.getElementById('check-perf-mode');
+  if (perfCheck) perfCheck.checked = State.perfMode;
+  meshes.forEach(m => {
+    const ud = m.userData;
+    ud.targetH = State.perfMode ? ud.perfH : ud.baseH;
+    if (ud.hazard) ud.hazard.visible = !State.perfMode;
+  });
+  updateFires();
+}
+
+function setAutoRotateEnabled(enabled, shouldAnimate = true) {
+  if (!controls) return;
+  controls.autoRotate = !!enabled;
+  const rotateCheck = document.getElementById('check-auto-rotate');
+  if (rotateCheck) rotateCheck.checked = controls.autoRotate;
+  if (controls.autoRotate && shouldAnimate) {
+    const farPos = camera.position.clone().normalize().multiplyScalar(450);
+    farPos.y = 110;
+    tweenCamera(farPos, {x:0,y:0,z:0}, 2000);
+  }
+}
 
 export function openSidebar(n) {
   const cols      = n.columns || [];
@@ -24,6 +95,9 @@ export function openSidebar(n) {
   const statusCol = isBN ? '#ff4400' : '#39ff14';
   const statusLbl = isBN ? 'BOTTLENECK' : 'HEALTHY';
   const tSrc      = n.time_source === 'real' ? '✓ from run_results.json' : '~ simulated (no run_results)';
+  const impact = calculateImpact(n.id);
+  const impactedCount = impact.impactedIds.length;
+  const exposureCount = impact.exposuresImpacted.length;
 
   sbContent.innerHTML = `
     <div class="sb-node-name" style="color:${n.color}">${n.name}</div>
@@ -58,6 +132,14 @@ export function openSidebar(n) {
       <div class="sb-stat"><span class="val">${cols.length||'—'}</span><span class="lbl">Columns</span></div>
       <div class="sb-stat"><span class="val">${(n.upstream||[]).length+(n.downstream||[]).length}</span><span class="lbl">Total Deps</span></div>
     </div>
+    ${impactedCount > 0 ? `
+      <div class="sb-section-title" style="color:#ff7744">// 💥 IMPACT ASSESSMENT</div>
+      <div style="background:rgba(255,80,0,0.1);border:1px solid rgba(255,100,20,0.45);border-radius:10px;padding:14px 12px;margin-bottom:14px;box-shadow:0 0 14px rgba(255,80,0,0.18)">
+        <div style="font-size:13px;color:#ffd8c8;line-height:1.5;">Changing this model propagates to <strong style="color:#fff">${impactedCount}</strong> downstream nodes.</div>
+        ${exposureCount > 0 ? `<div style="margin-top:8px;font-size:12px;color:#ff9966;line-height:1.45;">⚠️ Critical Danger: Feeds <strong style="color:#fff">${exposureCount}</strong> connected Dashboards/Exposures.</div>` : ''}
+        <button id="btn-show-blast" style="margin-top:12px;background:linear-gradient(90deg,#ff4400,#ff7700);border:none;border-radius:8px;color:#fff;padding:8px 11px;font-size:11px;letter-spacing:1.4px;cursor:pointer;font-weight:bold;box-shadow:0 0 12px rgba(255,80,0,0.35)">[ SHOW BLAST RADIUS ]</button>
+      </div>
+    ` : ''}
     <div class="sb-section-title">// METADATA</div>
     <div class="meta-row"><span class="key">SCHEMA</span><span class="val" style="color:${n.color}">${n.schema||'—'}</span></div>
     <div class="meta-row"><span class="key">MATERIALIZATION</span><span class="val">${n.materialized}</span></div>
@@ -77,6 +159,14 @@ export function openSidebar(n) {
     const q = s.value.toLowerCase();
     document.querySelectorAll('#col-list .col-row').forEach(r => { r.style.display = r.dataset.col.includes(q) ? 'flex' : 'none'; });
   });
+
+  const blastBtn = document.getElementById('btn-show-blast');
+  if (blastBtn) {
+    blastBtn.addEventListener('click', () => {
+      const ids = [n.id, ...impact.impactedIds];
+      applyBlastRadius(n.id, ids);
+    });
+  }
 }
 
 export function closeSidebar() {
@@ -90,6 +180,7 @@ export function closeSidebar() {
 // ── SLA Panel ──────────────────────────────────────────
 function toggleSlaPanel() {
   if (isSettingsOpen) toggleSettingsPanel();
+  if (isArchitectureOpen) toggleArchitecturePanel();
   isSlaPanelOpen = !isSlaPanelOpen;
   document.getElementById('sla-panel').classList.toggle('open', isSlaPanelOpen);
   document.getElementById('dock-sla').classList.toggle('active', isSlaPanelOpen);
@@ -98,9 +189,133 @@ function toggleSlaPanel() {
 // ── Settings Drawer ─────────────────────────────────────
 function toggleSettingsPanel() {
   if (isSlaPanelOpen) toggleSlaPanel();
+  if (isArchitectureOpen) toggleArchitecturePanel();
+  if (isAiPanelOpen) toggleAiPanel();
   isSettingsOpen = !isSettingsOpen;
   document.getElementById('settings-panel').classList.toggle('open', isSettingsOpen);
   document.getElementById('dock-settings').classList.toggle('active', isSettingsOpen);
+}
+
+function toggleArchitecturePanel() {
+  if (isSlaPanelOpen) toggleSlaPanel();
+  if (isSettingsOpen) toggleSettingsPanel();
+  if (isAiPanelOpen) toggleAiPanel();
+  isArchitectureOpen = !isArchitectureOpen;
+  document.getElementById('architecture-panel').classList.toggle('open', isArchitectureOpen);
+  document.getElementById('dock-architecture').classList.toggle('active', isArchitectureOpen);
+}
+
+function toggleAiPanel() {
+  if (isSlaPanelOpen) toggleSlaPanel();
+  if (isSettingsOpen) toggleSettingsPanel();
+  if (isArchitectureOpen) toggleArchitecturePanel();
+  isAiPanelOpen = !isAiPanelOpen;
+  const panel = document.getElementById('ai-panel');
+  const dockBtn = document.getElementById('dock-ai');
+  if (panel) panel.classList.toggle('open', isAiPanelOpen);
+  if (dockBtn) dockBtn.classList.toggle('active', isAiPanelOpen);
+  if (isAiPanelOpen) {
+    renderAiMessages();
+    const inputEl = document.getElementById('ai-chat-input');
+    if (inputEl) setTimeout(() => inputEl.focus(), 0);
+  }
+}
+
+function appendAiMessage(role, content) {
+  aiHistory.push({ role, content });
+  renderAiMessages();
+}
+
+function renderAiMessages() {
+  const body = document.getElementById('ai-chat-body');
+  if (!body) return;
+  body.innerHTML = aiHistory.map((m) => {
+    const cls = m.role === 'user' ? 'user' : (m.role === 'assistant' ? 'assistant' : 'system');
+    const safe = String(m.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<div class="ai-msg ${cls}">${safe}</div>`;
+  }).join('');
+  body.scrollTop = body.scrollHeight;
+}
+
+function triggerFocusAction(target) {
+  if (!target) return;
+  const mode = State.viewMode || '3d';
+  if (mode === '2d') focusNode2D(target);
+  else flyToNode(target);
+}
+
+async function handleAiSubmit() {
+  const inputEl = document.getElementById('ai-chat-input');
+  if (!inputEl) return;
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  if (!aiClient.hasApiKey()) {
+    appendAiMessage('system', 'Save your OpenAI API key first in Settings > AI Copilot.');
+    return;
+  }
+
+  appendAiMessage('user', text);
+  inputEl.value = '';
+  const sendBtn = document.getElementById('ai-chat-send');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '...'; }
+
+  try {
+    const payload = await aiClient.chat(text, aiHistory);
+    appendAiMessage('assistant', payload.message || '');
+    if (payload.action === 'FOCUS_NODE' && payload.target) {
+      triggerFocusAction(payload.target);
+    }
+  } catch (err) {
+    appendAiMessage('system', err?.message || 'AI request failed.');
+  } finally {
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'SEND'; }
+  }
+}
+
+export function initAiCopilot() {
+  const dockAi = document.getElementById('dock-ai');
+  const closeAi = document.getElementById('ai-close');
+  const sendBtn = document.getElementById('ai-chat-send');
+  const inputEl = document.getElementById('ai-chat-input');
+  const keyInput = document.getElementById('input-openai-key');
+  const saveKeyBtn = document.getElementById('btn-save-openai-key');
+  const keyStatus = document.getElementById('openai-key-status');
+
+  if (dockAi) dockAi.addEventListener('click', toggleAiPanel);
+  if (closeAi) closeAi.addEventListener('click', toggleAiPanel);
+  if (sendBtn) sendBtn.addEventListener('click', handleAiSubmit);
+  if (inputEl) {
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleAiSubmit();
+      }
+    });
+  }
+
+  if (keyInput) {
+    keyInput.value = aiClient.hasApiKey() ? '••••••••••••' : '';
+  }
+  if (keyStatus) {
+    keyStatus.textContent = aiClient.hasApiKey()
+      ? 'API key stored locally. You can overwrite it anytime.'
+      : 'Stored locally in this browser.';
+  }
+
+  if (saveKeyBtn && keyInput) {
+    saveKeyBtn.addEventListener('click', () => {
+      const val = keyInput.value.trim();
+      if (!val || val.startsWith('••••')) return;
+      aiClient.setApiKey(val);
+      keyInput.value = '••••••••••••';
+      if (keyStatus) keyStatus.textContent = 'API key stored locally ✓';
+    });
+  }
+
+  if (!aiHistory.length) {
+    appendAiMessage('system', 'DagCity AI ready. Ask for bottlenecks, SLA risks, or say "focus on X" to fly there.');
+  }
 }
 
 export function initSettings() {
@@ -108,6 +323,24 @@ export function initSettings() {
   const sCls = document.getElementById('settings-close');
   if (dSet) dSet.addEventListener('click', toggleSettingsPanel);
   if (sCls) sCls.addEventListener('click', toggleSettingsPanel);
+
+  const checkAutoRotate = document.getElementById('check-auto-rotate');
+  if (checkAutoRotate) {
+    checkAutoRotate.checked = !!controls?.autoRotate;
+    checkAutoRotate.addEventListener('change', () => {
+      setAutoRotateEnabled(checkAutoRotate.checked);
+    });
+  }
+
+  const btnResetView = document.getElementById('btn-reset-view');
+  if (btnResetView) {
+    btnResetView.addEventListener('click', () => {
+      tweenCamera(INIT_CAM, {x:0,y:0,z:0}, 1200);
+      setAutoRotateEnabled(true, false);
+      if (sidebar) sidebar.classList.remove('open');
+      resetSelection();
+    });
+  }
 
   // Neon Bloom
   const inputBloom = document.getElementById('input-bloom');
@@ -136,6 +369,305 @@ export function initSettings() {
       State.set('showParticles', checkVfx.checked);
     });
   }
+}
+
+function initArchitecturePanel() {
+  const dArch = document.getElementById('dock-architecture');
+  const aCls = document.getElementById('architecture-close');
+  if (dArch) dArch.addEventListener('click', toggleArchitecturePanel);
+  if (aCls) aCls.addEventListener('click', toggleArchitecturePanel);
+
+  const checkDataVolume = document.getElementById('check-data-volume');
+  const archControls = document.getElementById('arch-swell-controls');
+  const metricSelect = document.getElementById('select-swell-metric');
+  const intensityInput = document.getElementById('input-swell-intensity');
+  const intensityVal = document.getElementById('val-swell-intensity');
+  const intensityFill = document.getElementById('fill-swell-intensity');
+  const warnInput = document.getElementById('input-warn-threshold');
+  const warnVal = document.getElementById('val-warn-threshold');
+  const warnFill = document.getElementById('fill-warn-threshold');
+  const criticalInput = document.getElementById('input-critical-threshold');
+  const criticalVal = document.getElementById('val-critical-threshold');
+  const criticalFill = document.getElementById('fill-critical-threshold');
+  const legendLow = document.getElementById('legend-low-range');
+  const legendMid = document.getElementById('legend-mid-range');
+  const legendHigh = document.getElementById('legend-high-range');
+  const checkAutoThreshold = document.getElementById('check-auto-threshold');
+  const thresholdInput = document.getElementById('input-reference-threshold');
+  const autoThresholdHint = document.getElementById('auto-threshold-hint');
+  const selectedMetricEl = document.getElementById('arch-selected-metric-value');
+  const selectedMetricCard = selectedMetricEl ? selectedMetricEl.closest('.arch-preview') : null;
+
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const metricValue = (n, metric) => {
+    if (metric === 'rows') {
+      const directRows = toNum(n.row_count) ||
+        toNum(n.rows) ||
+        toNum(n.num_rows) ||
+        toNum(n.rowCount) ||
+        toNum(n.stats?.row_count) ||
+        toNum(n.stats?.rows) ||
+        toNum(n.stats?.num_rows) ||
+        toNum(n.meta?.row_count) ||
+        toNum(n.meta?.rows) ||
+        toNum(n.meta?.num_rows);
+      if (directRows > 0) return directRows;
+
+      const cols = Math.max(1, (n.columns || []).length || 0);
+      const deps = ((n.upstream || []).length + (n.downstream || []).length);
+      const nameFactor = Math.max(1, (n.name || '').length);
+      return Math.max(1000, Math.round((cols * 12000) + (deps * 26000) + (nameFactor * 350)));
+    }
+
+    if (metric === 'code_length') {
+      return toNum(n.code_length) ||
+        toNum(n.sql_length) ||
+        toNum(n.stats?.code_length) ||
+        toNum(n.meta?.code_length) ||
+        Math.max(1, ((n.columns || []).length * 2500) + ((n.name || '').length * 500));
+    }
+    if (metric === 'connections') {
+      return Math.max(1, ((n.upstream || []).length + (n.downstream || []).length) * 50000);
+    }
+    return Math.max(1, toNum(n.execution_time) * 100000);
+  };
+
+  const formatCompact = (value) => {
+    const n = Math.max(0, Number(value) || 0);
+    if (n >= 1000000000) return (n / 1000000000).toFixed(1) + 'B';
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+    return Math.round(n).toString();
+  };
+
+  const updateSelectedMetricPreview = () => {
+    if (!selectedMetricEl) return;
+    selectedMetricEl.classList.remove('severity-low', 'severity-mid', 'severity-high');
+    if (selectedMetricCard) {
+      selectedMetricCard.classList.remove('severity-low', 'severity-mid', 'severity-high');
+    }
+
+    const selected = State.selectedNode;
+    if (!selected) {
+      selectedMetricEl.textContent = 'Select a building to inspect metric value.';
+      return;
+    }
+
+    const metric = State.dataSwellMetric || 'execution_time';
+    const rawValue = metricValue(selected, metric);
+    const refThreshold = Math.max(1, Number(State.referenceThreshold || State.autoMaxThreshold || 1));
+    const ratio = rawValue / refThreshold;
+
+    const warnPct = Math.max(10, Math.min(95, Number(State.swellWarnThresholdPct) || 60));
+    const criticalPct = Math.max(warnPct + 1, Math.min(200, Number(State.swellCriticalThresholdPct) || 100));
+    const warnRatio = warnPct / 100;
+    const criticalRatio = criticalPct / 100;
+
+    if (ratio >= criticalRatio) {
+      selectedMetricEl.classList.add('severity-high');
+      if (selectedMetricCard) selectedMetricCard.classList.add('severity-high');
+    } else if (ratio >= warnRatio) {
+      selectedMetricEl.classList.add('severity-mid');
+      if (selectedMetricCard) selectedMetricCard.classList.add('severity-mid');
+    } else {
+      selectedMetricEl.classList.add('severity-low');
+      if (selectedMetricCard) selectedMetricCard.classList.add('severity-low');
+    }
+
+    if (metric === 'rows') {
+      const val = metricValue(selected, metric);
+      const hasRealRows =
+        toNum(selected.row_count) ||
+        toNum(selected.rows) ||
+        toNum(selected.num_rows) ||
+        toNum(selected.rowCount) ||
+        toNum(selected.stats?.row_count) ||
+        toNum(selected.stats?.rows) ||
+        toNum(selected.stats?.num_rows) ||
+        toNum(selected.meta?.row_count) ||
+        toNum(selected.meta?.rows) ||
+        toNum(selected.meta?.num_rows);
+      const marker = hasRealRows > 0 ? '✓' : '~';
+      selectedMetricEl.textContent = `${selected.name}: ${marker}${formatCompact(val)} rows (${(ratio * 100).toFixed(0)}%)`;
+      return;
+    }
+
+    if (metric === 'connections') {
+      const links = (selected.upstream || []).length + (selected.downstream || []).length;
+      selectedMetricEl.textContent = `${selected.name}: ${links} links (${(ratio * 100).toFixed(0)}%)`;
+      return;
+    }
+
+    if (metric === 'code_length') {
+      selectedMetricEl.textContent = `${selected.name}: ${formatCompact(rawValue)} code (${(ratio * 100).toFixed(0)}%)`;
+      return;
+    }
+
+    const sec = Number(selected.execution_time || 0);
+    selectedMetricEl.textContent = `${selected.name}: ${sec.toFixed(2)}s (${(ratio * 100).toFixed(0)}%)`;
+  };
+
+  const computeAutoMaxThreshold = () => {
+    const rawNodes = State.raw?.nodes || [];
+    if (!rawNodes.length) return 1;
+    const metric = State.dataSwellMetric || 'execution_time';
+    const maxVal = rawNodes.reduce((acc, node) => {
+      return Math.max(acc, metricValue(node, metric));
+    }, 1);
+    return Math.max(1, Math.round(maxVal));
+  };
+
+  const syncThresholdUi = () => {
+    const auto = !!State.autoAdjustThreshold;
+    if (checkAutoThreshold) checkAutoThreshold.checked = auto;
+    if (thresholdInput) {
+      thresholdInput.disabled = auto;
+      thresholdInput.value = String(Math.max(1, Math.round(State.referenceThreshold || 1)));
+    }
+    if (autoThresholdHint) {
+      const mode = auto ? 'AUTO' : 'MANUAL';
+      autoThresholdHint.textContent = `${mode} · Max project value: ${Math.round(State.autoMaxThreshold || 1).toLocaleString()}`;
+    }
+  };
+
+  const refreshAutoThreshold = () => {
+    const autoMax = computeAutoMaxThreshold();
+    State.set('autoMaxThreshold', autoMax);
+    if (State.autoAdjustThreshold) {
+      State.set('referenceThreshold', autoMax);
+    } else if (!State.referenceThreshold || State.referenceThreshold <= 0) {
+      State.set('referenceThreshold', autoMax);
+    }
+    syncThresholdUi();
+  };
+
+  const updateArchVisibility = (enabled) => {
+    if (!archControls) return;
+    archControls.classList.toggle('hidden', !enabled);
+  };
+
+  if (checkDataVolume) {
+    checkDataVolume.checked = !!State.dataVolumeMode;
+    updateArchVisibility(checkDataVolume.checked);
+    checkDataVolume.addEventListener('change', () => {
+      State.set('dataVolumeMode', checkDataVolume.checked);
+      updateArchVisibility(checkDataVolume.checked);
+    });
+  }
+
+  if (metricSelect) {
+    metricSelect.value = State.dataSwellMetric || 'execution_time';
+    metricSelect.addEventListener('change', () => {
+      State.set('dataSwellMetric', metricSelect.value);
+      refreshAutoThreshold();
+      updateSelectedMetricPreview();
+    });
+  }
+
+  if (checkAutoThreshold) {
+    checkAutoThreshold.checked = !!State.autoAdjustThreshold;
+    checkAutoThreshold.addEventListener('change', () => {
+      State.set('autoAdjustThreshold', checkAutoThreshold.checked);
+      if (checkAutoThreshold.checked) {
+        State.set('referenceThreshold', State.autoMaxThreshold || 1);
+      }
+      syncThresholdUi();
+      updateSelectedMetricPreview();
+    });
+  }
+
+  if (thresholdInput) {
+    thresholdInput.value = String(Math.max(1, Math.round(State.referenceThreshold || 1)));
+    thresholdInput.addEventListener('input', () => {
+      const val = Math.max(1, Math.round(toNum(thresholdInput.value) || 1));
+      State.set('referenceThreshold', val);
+      thresholdInput.value = String(val);
+      syncThresholdUi();
+      updateSelectedMetricPreview();
+    });
+  }
+
+  const syncIntensity = (raw) => {
+    const val = Math.max(0.5, Math.min(3.0, Number(raw) / 100));
+    State.set('dataSwellIntensity', val);
+    if (intensityVal) intensityVal.textContent = val.toFixed(1) + 'x';
+    if (intensityFill) intensityFill.style.width = ((val - 0.5) / 2.5 * 100) + '%';
+  };
+
+  const syncThresholdLegend = () => {
+    const warnPct = Math.max(10, Math.min(95, Number(State.swellWarnThresholdPct) || 60));
+    const criticalPct = Math.max(warnPct + 1, Math.min(200, Number(State.swellCriticalThresholdPct) || 100));
+    if (legendLow) legendLow.textContent = `< ${warnPct}% → Cyan`;
+    if (legendMid) legendMid.textContent = `${warnPct}% to ${criticalPct}% → Yellow`;
+    if (legendHigh) legendHigh.textContent = `≥ ${criticalPct}% → Red`;
+  };
+
+  if (intensityInput) {
+    intensityInput.value = String(Math.round((State.dataSwellIntensity || 1.0) * 100));
+    syncIntensity(intensityInput.value);
+    intensityInput.addEventListener('input', () => syncIntensity(intensityInput.value));
+  }
+
+  const syncWarnThreshold = (raw) => {
+    const val = Math.max(10, Math.min(95, Number(raw) || 60));
+    if ((Number(State.swellCriticalThresholdPct) || 100) <= val) {
+      State.set('swellCriticalThresholdPct', val + 1);
+      if (criticalInput) criticalInput.value = String(val + 1);
+      if (criticalVal) criticalVal.textContent = `${val + 1}% of ref`;
+      if (criticalFill) {
+        const criticalPct = ((val + 1 - 20) / 180) * 100;
+        criticalFill.style.width = Math.max(0, Math.min(100, criticalPct)) + '%';
+      }
+    }
+    State.set('swellWarnThresholdPct', val);
+    if (warnVal) warnVal.textContent = `${val}% of ref`;
+    if (warnFill) {
+      const warnPct = ((val - 10) / 85) * 100;
+      warnFill.style.width = Math.max(0, Math.min(100, warnPct)) + '%';
+    }
+    syncThresholdLegend();
+    updateSelectedMetricPreview();
+  };
+
+  const syncCriticalThreshold = (raw) => {
+    const minCritical = (Number(State.swellWarnThresholdPct) || 60) + 1;
+    const val = Math.max(minCritical, Math.min(200, Number(raw) || 100));
+    State.set('swellCriticalThresholdPct', val);
+    if (criticalVal) criticalVal.textContent = `${val}% of ref`;
+    if (criticalFill) {
+      const criticalPct = ((val - 20) / 180) * 100;
+      criticalFill.style.width = Math.max(0, Math.min(100, criticalPct)) + '%';
+    }
+    syncThresholdLegend();
+    updateSelectedMetricPreview();
+  };
+
+  if (warnInput) {
+    warnInput.value = String(Number(State.swellWarnThresholdPct) || 60);
+    syncWarnThreshold(warnInput.value);
+    warnInput.addEventListener('input', () => syncWarnThreshold(warnInput.value));
+  }
+
+  if (criticalInput) {
+    criticalInput.value = String(Number(State.swellCriticalThresholdPct) || 100);
+    syncCriticalThreshold(criticalInput.value);
+    criticalInput.addEventListener('input', () => syncCriticalThreshold(criticalInput.value));
+  }
+
+  syncThresholdLegend();
+
+  refreshAutoThreshold();
+  updateSelectedMetricPreview();
+  State.on('change:raw', refreshAutoThreshold);
+  State.on('city:rebuilt', refreshAutoThreshold);
+  State.on('change:selectedNode', updateSelectedMetricPreview);
+  State.on('city:rebuilt', updateSelectedMetricPreview);
+  State.on('change:swellWarnThresholdPct', updateSelectedMetricPreview);
+  State.on('change:swellCriticalThresholdPct', updateSelectedMetricPreview);
 }
 
 function handleManualSLAInput(el, onSync) {
@@ -365,6 +897,24 @@ window._saveVFX = () => {
 // ── Project Manager ─────────────────────────────────────
 const projectModal = document.getElementById('project-modal');
 const pmList       = document.getElementById('pm-list');
+let pmFilterMode   = 'all';
+
+function initProjectFilters() {
+  const allBtn = document.getElementById('pm-filter-all');
+  const activeBtn = document.getElementById('pm-filter-active');
+  const inactiveBtn = document.getElementById('pm-filter-inactive');
+  const setFilter = (mode) => {
+    pmFilterMode = mode;
+    if (allBtn) allBtn.classList.toggle('active', mode === 'all');
+    if (activeBtn) activeBtn.classList.toggle('active', mode === 'active');
+    if (inactiveBtn) inactiveBtn.classList.toggle('active', mode === 'inactive');
+    openProjectModal();
+  };
+
+  if (allBtn) allBtn.onclick = () => setFilter('all');
+  if (activeBtn) activeBtn.onclick = () => setFilter('active');
+  if (inactiveBtn) inactiveBtn.onclick = () => setFilter('inactive');
+}
 
 async function openProjectModal() {
   projectModal.classList.add('open');
@@ -389,19 +939,27 @@ async function openProjectModal() {
 }
 
 function renderProjects(projects) {
-  if (!projects.length) {
+  const filtered = projects.filter((p) => {
+    if (pmFilterMode === 'active') return !p.disabled;
+    if (pmFilterMode === 'inactive') return !!p.disabled;
+    return true;
+  });
+
+  if (!filtered.length) {
     pmList.innerHTML = '<div id="pm-empty">NO SAVED PROJECTS YET<br><span style="font-size:10px;opacity:0.5;margin-top:8px;display:block;">Upload a manifest.json to create your first project</span></div>';
     return;
   }
   const active = localStorage.getItem('dagcity_active_project');
   pmList.innerHTML = '';
-  projects.forEach(p => {
+  filtered.forEach(p => {
     const isActive = p.name === active;
+    const isDisabled = !!p.disabled;
     const date = p.created_at ? new Date(p.created_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Unknown date';
     const isLive = p.source === 'local_sync' || p.source === 'live_sync';
     
     const row = document.createElement('div');
     row.className = `pm-project-row ${isActive ? 'active' : ''}`;
+    if (isDisabled) row.style.opacity = '0.5';
     
     row.innerHTML = `
       <div class="pm-project-info">
@@ -417,10 +975,11 @@ function renderProjects(projects) {
         </div>
         <div class="pm-project-meta">
           ${isLive ? '⚡' : '📁'} ${p.node_count} BUILDINGS &nbsp;·&nbsp; ${date}
+          ${isDisabled ? `<br><span style="color:#ff9966;font-size:11px">${p.disabled_reason || 'Unavailable'}</span>` : ''}
         </div>
       </div>
       <div class="pm-project-actions">
-        <button class="pm-btn pm-btn-load" onclick="window._loadProject('${p.name}')">LOAD</button>
+        <button class="pm-btn pm-btn-load" onclick="window._loadProject('${p.name}')" ${isDisabled ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ''}>${isDisabled ? 'INACTIVE' : 'LOAD'}</button>
         <button class="pm-btn pm-btn-rename" style="opacity:0.4;" onclick="window._startRename('${p.name}')">RENAME</button>
         <button class="pm-btn pm-btn-delete" onclick="window._deleteProject('${p.name}')">DELETE</button>
       </div>`;
@@ -433,7 +992,16 @@ async function loadProject(name) {
   if (btn) { btn.textContent = 'LOADING...'; btn.disabled = true; }
   try {
     const res = await fetch('/api/projects/' + encodeURIComponent(name));
-    if (!res.ok) throw new Error('Not found');
+    if (!res.ok) {
+      if (res.status === 423) {
+        localStorage.removeItem('dagcity_active_project');
+        alert('This Live Sync project is inactive because the source changed.');
+        projectModal.classList.remove('open');
+        startNewProject();
+        return;
+      }
+      throw new Error('Not found');
+    }
     const data = await res.json();
     localStorage.setItem('dagcity_active_project', name);
     projectModal.classList.remove('open');
@@ -508,53 +1076,7 @@ window._deleteProject = deleteProject;
 
 // ── IDE Dock Controls ─────────────────────────────────
 export function initDock() {
-  const dockRotate = document.getElementById('dock-rotate');
-  const dockPerf   = document.getElementById('dock-perf');
-  const dockReset  = document.getElementById('dock-reset');
-  const labelRotate = document.getElementById('label-rotate');
-  const labelPerf   = document.getElementById('label-perf');
-
-  if (dockRotate) {
-    dockRotate.addEventListener('click', () => {
-      resetSelection();
-      if (!controls) return;
-      controls.autoRotate = !controls.autoRotate;
-      dockRotate.classList.toggle('active', controls.autoRotate);
-      if (labelRotate) labelRotate.textContent = controls.autoRotate ? 'AUTO-ROTATE: ON' : 'AUTO-ROTATE: OFF';
-      if (controls.autoRotate) {
-        const farPos = camera.position.clone().normalize().multiplyScalar(450); farPos.y = 110;
-        tweenCamera(farPos, {x:0,y:0,z:0}, 2000);
-      }
-    });
-  }
-
-  if (dockPerf) {
-    dockPerf.addEventListener('click', () => {
-      State.set('perfMode', !State.perfMode);
-      dockPerf.classList.toggle('perf-on', State.perfMode);
-      if (labelPerf) labelPerf.textContent = State.perfMode ? 'PERFORMANCE 3D: ON' : 'PERFORMANCE 3D: OFF';
-      meshes.forEach(m => {
-        const ud = m.userData;
-        ud.targetH = State.perfMode ? ud.perfH : ud.baseH;
-        if (ud.hazard) ud.hazard.visible = !State.perfMode;
-      });
-      updateFires();
-    });
-  }
-
-  if (dockReset) {
-    dockReset.addEventListener('click', () => {
-      tweenCamera(INIT_CAM, {x:0,y:0,z:0}, 1200);
-      if (controls) {
-        controls.autoRotate = true;
-        if (dockRotate) dockRotate.classList.add('active'); 
-        if (labelRotate) labelRotate.textContent = 'AUTO-ROTATE: ON';
-      }
-      if (sidebar) sidebar.classList.remove('open'); 
-      resetSelection();
-    });
-  }
-
+  initProjectFilters();
   const sbClose = document.getElementById('sb-close');
   if (sbClose) sbClose.addEventListener('click', closeSidebar);
   
@@ -574,6 +1096,8 @@ export function initDock() {
   
   initStatusHUD();
   initSettings();
+  initArchitecturePanel();
+  initAiCopilot();
 }
 
 async function initStatusHUD() {
@@ -667,15 +1191,18 @@ export function initRaycaster(renderer, camera) {
       applySelection(found); openSidebar(found);
       const m = nodeMeshMap[found.id];
       if (m) {
-        if (controls) {
-          controls.autoRotate = false;
-          document.getElementById('dock-rotate').classList.remove('active');
-          const lbl = document.getElementById('label-rotate'); if (lbl) lbl.textContent = 'AUTO-ROTATE: OFF';
+        if (!State.selectedNode) {
+          controls.target.copy(new THREE.Vector3(0,0,0));
+        } else {
+          const m = nodeMeshMap[State.selectedNode.id];
+          if (controls) {
+            setAutoRotateEnabled(false, false);
+          }
+          const buildingPos = m.position.clone();
+          const currentDir = camera.position.clone().sub(controls.target).normalize();
+          const destPos = buildingPos.clone().add(currentDir.multiplyScalar(120));
+          tweenCamera(destPos, buildingPos.clone().add(new THREE.Vector3(0,10,0)), 1200);
         }
-        const buildingPos = m.position.clone();
-        const currentDir = camera.position.clone().sub(controls.target).normalize();
-        const destPos = buildingPos.clone().add(currentDir.multiplyScalar(120));
-        tweenCamera(destPos, buildingPos.clone().add(new THREE.Vector3(0,10,0)), 1200);
       }
     } else {
       sidebar.classList.remove('open'); resetSelection();
@@ -695,6 +1222,14 @@ export function initSLA() {
   const sCls = document.getElementById('sla-close');
   if (dSla) dSla.addEventListener('click', toggleSlaPanel);
   if (sCls) sCls.addEventListener('click', toggleSlaPanel);
+
+  const perfCheck = document.getElementById('check-perf-mode');
+  if (perfCheck) {
+    perfCheck.checked = !!State.perfMode;
+    perfCheck.addEventListener('change', () => {
+      setPerfModeEnabled(perfCheck.checked);
+    });
+  }
 
   const globalInput = document.getElementById('sla-global-input');
   const globalFill  = document.getElementById('sla-global-fill');

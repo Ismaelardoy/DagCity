@@ -27,6 +27,18 @@ export const State = {
 
   // ── UI ──────────────────────────────────────────────
   perfMode: false,
+  dataVolumeMode: false,
+  dataSwellMetric: 'execution_time',
+  dataSwellIntensity: 1.0,
+  autoAdjustThreshold: true,
+  autoMaxThreshold: 1,
+  referenceThreshold: 1,
+  swellWarnThresholdPct: 60,
+  swellCriticalThresholdPct: 100,
+  viewMode: '3d',
+  activeFilters: {},
+  blastRadiusSourceId: null,
+  blastRadiusIds: [],
   selectedNode: null,
   activeProject: null,  // localStorage key
 

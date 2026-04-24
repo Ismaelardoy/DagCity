@@ -110,6 +110,9 @@ export class VFXManager {
       if (slaTarget === undefined) slaTarget = State.userDefinedSLA;
       
       const vfxThresholds = State.vfxThresholds || { smoke: 1.0, sparks: 1.2, fire: 1.5 };
+      const smokeThreshold = Number(vfxThresholds.smoke ?? 1.0);
+      const sparksThreshold = Math.max(Number(vfxThresholds.sparks ?? 1.2), smokeThreshold);
+      const fireThreshold = Math.max(Number(vfxThresholds.fire ?? 1.5), sparksThreshold);
       const ratio = (slaTarget <= 0) ? 999 : (n.execution_time / slaTarget);
       const isError = n.status === 'error' || n.state === 'error';
       const smoke  = vfx.children.find(c => c.name === 'vfx_smoke');
@@ -118,10 +121,15 @@ export class VFXManager {
       const currentH = ud.baseH * m.scale.y;
       
       // We only show thermal effects if Performance Mode is ON and Particles are enabled
-      vfx.visible = State.perfMode && State.showParticles && (ratio >= vfxThresholds.smoke || isError);
+      vfx.visible = State.perfMode && State.showParticles && (ratio >= smokeThreshold || isError);
 
       // ── Level 1: Smoke (Ratio >= smoke threshold) ─────────────────
-      const showSmoke = State.perfMode && State.showParticles && (ratio >= vfxThresholds.smoke || isError);
+      const perfParticles = State.perfMode && State.showParticles;
+      const showSmokeLevel = perfParticles && (ratio >= smokeThreshold || isError);
+      const showSparksLevel = perfParticles && (ratio >= sparksThreshold || isError);
+      const showFireLevel = perfParticles && (ratio >= fireThreshold || isError);
+
+      const showSmoke = showSmokeLevel || showSparksLevel || showFireLevel;
       smoke.visible = showSmoke;
       if (showSmoke) {
         smoke.children.forEach(s => {
@@ -140,7 +148,7 @@ export class VFXManager {
       }
 
       // ── Level 2: Sparks & Pulse (Ratio >= sparks threshold) ────────
-      const showSparks = State.perfMode && State.showParticles && (ratio >= vfxThresholds.sparks || isError);
+      const showSparks = showSparksLevel || showFireLevel;
       sparks.visible = showSparks;
       if (showSparks) {
         sparks.children.forEach(s => {
@@ -167,7 +175,7 @@ export class VFXManager {
       }
 
       // ── Level 3: Fire (Ratio >= fire threshold) ───────────────────
-      const showFire = State.perfMode && State.showParticles && (ratio >= vfxThresholds.fire || isError);
+      const showFire = showFireLevel;
       fire.visible = showFire;
       if (showFire) {
         fire.children.forEach(f => {

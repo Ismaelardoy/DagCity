@@ -113,6 +113,37 @@ class ManifestParser:
             })
         return result
 
+    def _extract_row_count(self, details: Dict) -> int:
+        def _as_positive_int(v) -> int:
+            try:
+                n = float(v)
+                if n > 0:
+                    return int(round(n))
+            except (TypeError, ValueError):
+                pass
+            return 0
+
+        stats = details.get("stats", {}) or {}
+        meta = details.get("meta", {}) or {}
+        candidates = [
+            details.get("row_count"),
+            details.get("rows"),
+            details.get("num_rows"),
+            details.get("rowCount"),
+            stats.get("row_count"),
+            stats.get("rows"),
+            stats.get("num_rows"),
+            meta.get("row_count"),
+            meta.get("rows"),
+            meta.get("num_rows"),
+        ]
+
+        for c in candidates:
+            parsed = _as_positive_int(c)
+            if parsed > 0:
+                return parsed
+        return 0
+
     def _simulate_execution_time(self, name: str) -> float:
         """
         Generates consistent simulated times.
@@ -189,6 +220,7 @@ class ManifestParser:
 
             # Execution time: real > simulated
             exec_time = run_times.get(uid, self._simulate_execution_time(name))
+            row_count = self._extract_row_count(details)
 
             parsed_nodes[uid] = {
                 "id":            uid,
@@ -206,6 +238,7 @@ class ManifestParser:
                 "upstream":      [],
                 "downstream":    [],
                 "execution_time": exec_time,
+                "row_count":     row_count,
                 "time_source":   "real" if uid in run_times else "simulated",
                 "is_bottleneck": False,
                 "is_dead_end":   False,
