@@ -258,7 +258,11 @@ export function showDAGView2D() {
   const container = getContainer();
   if (!container) return;
   container.style.display = 'block';
-  if (cy) cy.resize();
+  if (cy) {
+    cy.resize();
+    cy.reset();
+    cy.fit(cy.elements(), 90);
+  }
 }
 
 export function hideDAGView2D() {

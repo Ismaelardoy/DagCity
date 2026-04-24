@@ -1,7 +1,21 @@
 import { State } from './State.js';
 
-const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
-const OPENAI_KEY_STORAGE = 'dagcity_openai_api_key';
+const PROVIDER_CONFIG = {
+  openai: {
+    baseUrl: 'https://api.openai.com/v1/chat/completions',
+    model: 'gpt-4o-mini',
+  },
+  groq: {
+    baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    model: 'llama-3.3-70b-versatile',
+  },
+};
+
+const STORAGE_KEYS = {
+  provider: 'dagcity_ai_provider',
+  apiKey: 'dagcity_ai_api_key',
+};
+
 const DAGCITY_SYSTEM_PROMPT = 'Eres DagCity AI, un asistente de ingeniería de datos. Siempre debes responder usando un bloque JSON estricto con este formato: { "message": "tu respuesta hablada", "action": "NONE | FOCUS_NODE", "target": "nombre_del_nodo_si_aplica" }.';
 
 function sanitizeText(value) {
@@ -57,24 +71,46 @@ function parseAssistantPayload(rawContent) {
 }
 
 export class AIClient {
+  constructor() {
+    this.provider = localStorage.getItem(STORAGE_KEYS.provider) || 'openai';
+    this.apiKey = localStorage.getItem(STORAGE_KEYS.apiKey) || '';
+  }
+
+  getProvider() {
+    return this.provider;
+  }
+
+  setProvider(providerId) {
+    if (PROVIDER_CONFIG[providerId]) {
+      this.provider = providerId;
+      localStorage.setItem(STORAGE_KEYS.provider, providerId);
+    }
+  }
+
   getApiKey() {
-    return localStorage.getItem(OPENAI_KEY_STORAGE) || '';
+    return this.apiKey;
   }
 
   setApiKey(value) {
-    localStorage.setItem(OPENAI_KEY_STORAGE, sanitizeText(value));
+    this.apiKey = sanitizeText(value);
+    localStorage.setItem(STORAGE_KEYS.apiKey, this.apiKey);
   }
 
   hasApiKey() {
-    return !!this.getApiKey();
+    return !!this.apiKey;
+  }
+
+  getConfig() {
+    return PROVIDER_CONFIG[this.provider] || PROVIDER_CONFIG.openai;
   }
 
   async chat(userMessage, history = []) {
-    const key = this.getApiKey();
+    const key = this.apiKey;
     if (!key) {
-      throw new Error('Missing OpenAI API key. Save it in Settings > AI Copilot.');
+      throw new Error('Missing AI API key. Save it in Settings > AI Copilot.');
     }
 
+    const config = this.getConfig();
     const runtimeContext = collectRuntimeContext();
     const contextPrompt = 'Datos actuales del entorno DagCity: ' + JSON.stringify(runtimeContext);
 
@@ -85,14 +121,14 @@ export class AIClient {
       { role: 'user', content: String(userMessage || '') },
     ];
 
-    const response = await fetch(OPENAI_ENDPOINT, {
+    const response = await fetch(config.baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + key,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: config.model,
         temperature: 0.3,
         response_format: { type: 'json_object' },
         messages,
@@ -101,7 +137,7 @@ export class AIClient {
 
     if (!response.ok) {
       const errTxt = await response.text();
-      throw new Error('OpenAI API error ' + response.status + ': ' + errTxt);
+      throw new Error('AI API error ' + response.status + ': ' + errTxt);
     }
 
     const data = await response.json();

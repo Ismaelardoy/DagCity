@@ -22,6 +22,9 @@ import {
   focusNode2D,
 } from './DAGView2D.js';
 
+// Load persisted configuration from localStorage
+State.loadPersisted();
+
 // ── 1. Initialise Three.js scene ──────────────────────
 Visualizer.initScene();
 
@@ -192,7 +195,10 @@ function initViewToggle() {
   });
   State.on('change:selectedNode', (node) => {
     if (!node) return;
-    if (State.viewMode === '2d') focusNode2D(node.name || node.id);
+    if (State.viewMode === '2d') {
+      focusNode2D(node.name || node.id);
+      import('./UIManager.js').then(({ openSidebar }) => openSidebar(node));
+    }
   });
 
   applyViewMode(State.viewMode || '3d');

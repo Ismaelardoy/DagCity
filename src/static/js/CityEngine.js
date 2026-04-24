@@ -881,9 +881,11 @@ const keys = {};
 export const droneKeys = keys;
 
 window.addEventListener('keydown', e => {
+  const aiInput = document.getElementById('ai-chat-input');
+  if (aiInput && document.activeElement === aiInput) return;
   keys[e.code] = true;
   if (['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) {
-    controls.autoRotate = false;
+    if (controls) controls.autoRotate = false;
     const dockRotate = document.getElementById('dock-rotate');
     if (dockRotate) {
       dockRotate.classList.remove('active');
@@ -1129,7 +1131,13 @@ export function startAnimationLoop() {
         // Posicionar por encima del label de nombre para evitar solapamiento
         const safeSY = Math.max(0.001, sY);
         const volumeOffset = ud.volumeLabelOffset || 28;
-        ud.volumeLabel.position.y = ud.baseH + (volumeOffset / safeSY);
+        const bothModesActive = State.perfMode && State.dataVolumeMode;
+        if (bothModesActive) {
+          ud.volumeLabel.position.set(40, ud.baseH + (volumeOffset / safeSY) + 10, 0);
+        } else {
+          ud.volumeLabel.position.y = ud.baseH + (volumeOffset / safeSY);
+          ud.volumeLabel.position.x = 0;
+        }
       }
 
       // ── Critical Volume Pulse Effect ─────────────────────

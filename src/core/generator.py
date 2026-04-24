@@ -39,7 +39,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   top: 0;
   left: 0;
   display: none;
-  z-index: 5;
+  z-index: 1;
   background:
     radial-gradient(circle at 20% 20%, rgba(255, 0, 255, 0.07), transparent 30%),
     radial-gradient(circle at 70% 80%, rgba(0, 243, 255, 0.08), transparent 35%),
@@ -163,15 +163,14 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 /* ── IDE DOCK (left sidebar, VS Code style) ── */
 #ide-dock {
   position: fixed; top: 0; left: 0; height: 100vh; width: 62px;
-  z-index: 500; display: flex; flex-direction: column;
   background: rgba(0, 0, 0, 0.5);
   border-right: 1px solid rgba(0, 242, 255, 0.2);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   overflow: hidden;
   transition: width 0.3s cubic-bezier(0.4,0,0.2,1);
   user-select: none;
+  z-index: 1000;
 }
-#ide-dock:hover, #ide-dock.expanded { width: 250px; }
 
 .dock-section { display: flex; flex-direction: column; gap: 20px; padding: 20px 0; }
 .dock-section.bottom { margin-top: auto; border-top: 1px solid rgba(0,242,255,0.1); }
@@ -186,20 +185,16 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   text-transform: uppercase; position: relative;
 }
 #ide-dock:hover .dock-item, #ide-dock.expanded .dock-item { gap: 14px; }
-.dock-item:hover { 
-  color: var(--cyan); 
-  background: rgba(0,242,255,0.06); 
+#ide-dock:hover, #ide-dock.expanded { width: 250px; }
+.dock-icon { font-size: 22px; flex-shrink: 0; width: 26px; text-align: center; }
+.dock-label { font-size: 14px; opacity: 0; transition: opacity 0.2s 0.1s; pointer-events: none; }
+#ide-dock:hover .dock-label, #ide-dock.expanded .dock-label { opacity: 1; }
+.dock-item:hover {
+  color: var(--cyan);
+  background: rgba(0,242,255,0.06);
   border-left-color: var(--cyan);
   filter: drop-shadow(0 0 5px #00f2ff);
 }
-.dock-item.active { color: var(--cyan); border-left-color: var(--cyan); background: rgba(0,242,255,0.08); }
-.dock-item.perf-on { color: var(--orange); border-left-color: var(--orange); }
-.dock-item.data-volume-on { color: var(--green); border-left-color: var(--green); background: rgba(57,255,20,0.08); }
-.dock-item.ai-item { color: var(--magenta); }
-.dock-item.ai-item:hover { color: var(--magenta); background: rgba(255,0,255,0.06); border-left-color: var(--magenta); }
-.dock-icon { font-size: 22px; flex-shrink: 0; width: 26px; text-align: center; }
-.dock-label { font-size: 13px; opacity: 0; transition: opacity 0.2s 0.1s; pointer-events: none; }
-#ide-dock:hover .dock-label, #ide-dock.expanded .dock-label { opacity: 1; }
 
 .dock-divider { height: 1px; background: rgba(0,242,255,0.08); margin: 4px 14px; }
 
@@ -230,7 +225,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 /* ── SLA PANEL ── */
 #sla-panel {
   display: none;
-  position: fixed; top: 0; left: 62px; width: 420px; height: 100vh;
+  position: fixed; top: 0; left: 62px; width: 480px; height: 100vh;
   background: rgba(2, 6, 18, 0.97);
   border-right: 1px solid rgba(0,242,255,0.2);
   z-index: 600;
@@ -239,8 +234,10 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   -webkit-backdrop-filter: blur(30px);
   box-shadow: 8px 0 40px rgba(0,0,0,0.6);
   animation: sla-slide-in 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: left 0.3s cubic-bezier(0.4,0,0.2,1);
 }
 #sla-panel.open { display: flex; }
+#ide-dock:hover ~ #sla-panel.open, #ide-dock.expanded ~ #sla-panel.open { left: 250px; }
 @keyframes sla-slide-in {
   from { opacity: 0; transform: translateX(-20px); }
   to   { opacity: 1; transform: translateX(0); }
@@ -263,21 +260,22 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   transition: all 0.2s;
 }
 #sla-close:hover { background: rgba(255,0,255,0.2); box-shadow: 0 0 12px rgba(255,0,255,0.3); }
-#sla-body { flex: 1; overflow-y: auto; padding: 0; }
+#sla-body { flex: 1; overflow-y: auto; padding: 0 0 60px 0; min-height: 0; }
 #sla-body::-webkit-scrollbar { width: 4px; }
 #sla-body::-webkit-scrollbar-thumb { background: rgba(0,242,255,0.2); border-radius: 2px; }
 
 .sla-section { padding: 32px 30px; border-bottom: 1px solid rgba(0,242,255,0.06); }
-.sla-label { font-size: 13px; color: rgba(0,242,255,0.6); letter-spacing: 4px; margin-bottom: 22px; text-transform: uppercase; font-weight: bold; }
+.sla-label { font-size: 15px; color: rgba(0,242,255,0.6); letter-spacing: 4px; margin-bottom: 22px; text-transform: uppercase; font-weight: bold; }
 .sla-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.sla-name { font-size: 16px; color: #fff; letter-spacing: 0.5px; }
+.sla-name { font-size: 17px; color: #fff; letter-spacing: 0.5px; }
 .sla-val {
-  font-size: 28px; font-weight: 900; color: var(--cyan);
+  font-size: 29px; font-weight: 900; color: var(--cyan);
   text-shadow: 0 0 8px var(--cyan); font-family: 'Courier New', monospace;
   min-width: 80px; text-align: right;
   cursor: text; padding: 2px 6px; border-radius: 4px; transition: background 0.2s;
 }
 .sla-val:focus { background: rgba(0,242,255,0.15); outline: none; box-shadow: 0 0 0 1px var(--cyan); }
+.sla-desc { font-size: 14px; color: rgba(255,255,255,0.35); margin-bottom: 20px; letter-spacing: 0.5px; line-height: 1.4; }
 .sla-desc { font-size: 13px; color: rgba(255,255,255,0.35); margin-bottom: 20px; letter-spacing: 0.5px; line-height: 1.4; }
 
 /* Cockpit slider */
@@ -376,7 +374,7 @@ input:checked + .slider:before { transform: translateX(16px); }
 
 #ai-panel {
   display: none;
-  position: fixed; top: 0; left: 62px; width: 420px; height: 100vh;
+  position: fixed; top: 0; left: 62px; width: 480px; height: 100vh;
   background: rgba(4, 6, 18, 0.98);
   border-right: 1px solid rgba(255,0,255,0.24);
   z-index: 600;
@@ -385,14 +383,16 @@ input:checked + .slider:before { transform: translateX(16px); }
   -webkit-backdrop-filter: blur(30px);
   box-shadow: 8px 0 40px rgba(0,0,0,0.6);
   animation: sla-slide-in 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: left 0.3s cubic-bezier(0.4,0,0.2,1);
 }
 #ai-panel.open { display: flex; }
+#ide-dock:hover ~ #ai-panel.open, #ide-dock.expanded ~ #ai-panel.open { left: 250px; }
 #ai-chat-body { flex: 1; overflow-y: auto; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
 .ai-msg {
   border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.45;
+  padding: 14px 16px;
+  font-size: 16px;
+  line-height: 1.5;
   border: 1px solid rgba(255,255,255,0.08);
 }
 .ai-msg.user { align-self: flex-end; background: rgba(0,243,255,0.14); color: #e9feff; border-color: rgba(0,243,255,0.32); }
@@ -410,18 +410,18 @@ input:checked + .slider:before { transform: translateX(16px); }
   border-radius: 8px;
   background: rgba(0,0,0,0.35);
   color: #fff;
-  padding: 10px;
+  padding: 12px;
   font-family: 'Courier New', monospace;
-  font-size: 12px;
+  font-size: 15px;
 }
 #ai-chat-send {
   border: 1px solid rgba(0,243,255,0.35);
   background: rgba(0,243,255,0.14);
   color: #dffcff;
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   letter-spacing: 1px;
-  font-size: 11px;
+  font-size: 13px;
   cursor: pointer;
   font-weight: bold;
 }
@@ -430,7 +430,7 @@ input:checked + .slider:before { transform: translateX(16px); }
 /* ── SETTINGS PANEL ── */
 #settings-panel {
   display: none;
-  position: fixed; top: 0; left: 62px; width: 420px; height: 100vh;
+  position: fixed; top: 0; left: 62px; width: 480px; height: 100vh;
   background: rgba(2, 6, 18, 0.97);
   border-right: 1px solid rgba(0,242,255,0.2);
   z-index: 600;
@@ -439,13 +439,15 @@ input:checked + .slider:before { transform: translateX(16px); }
   -webkit-backdrop-filter: blur(30px);
   box-shadow: 8px 0 40px rgba(0,0,0,0.6);
   animation: sla-slide-in 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: left 0.3s cubic-bezier(0.4,0,0.2,1);
 }
 #settings-panel.open { display: flex; }
+#ide-dock:hover ~ #settings-panel.open, #ide-dock.expanded ~ #settings-panel.open { left: 250px; }
 .settings-section { padding: 32px 30px; border-bottom: 1px solid rgba(0,242,255,0.06); }
-.settings-label { font-size: 13px; color: var(--magenta); letter-spacing: 4px; margin-bottom: 22px; text-transform: uppercase; font-weight: bold; }
+.settings-label { font-size: 15px; color: var(--magenta); letter-spacing: 4px; margin-bottom: 22px; text-transform: uppercase; font-weight: bold; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.settings-name { font-size: 15px; color: #fff; letter-spacing: 1px; }
-.settings-val { font-size: 18px; font-weight: 900; color: var(--cyan); text-shadow: 0 0 8px var(--cyan); }
+.settings-name { font-size: 16px; color: #fff; letter-spacing: 1px; }
+.settings-val { font-size: 19px; font-weight: 900; color: var(--cyan); text-shadow: 0 0 8px var(--cyan); }
 .settings-action-btn {
   width: 100%;
   border: 1px solid rgba(0,242,255,0.35);
@@ -466,7 +468,7 @@ input:checked + .slider:before { transform: translateX(16px); }
 
 #architecture-panel {
   display: none;
-  position: fixed; top: 0; left: 62px; width: 420px; height: 100vh;
+  position: fixed; top: 0; left: 62px; width: 480px; height: 100vh;
   background: rgba(2, 6, 18, 0.97);
   border-right: 1px solid rgba(57,255,20,0.2);
   z-index: 600;
@@ -475,8 +477,10 @@ input:checked + .slider:before { transform: translateX(16px); }
   -webkit-backdrop-filter: blur(30px);
   box-shadow: 8px 0 40px rgba(0,0,0,0.6);
   animation: sla-slide-in 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: left 0.3s cubic-bezier(0.4,0,0.2,1);
 }
 #architecture-panel.open { display: flex; }
+#ide-dock:hover ~ #architecture-panel.open, #ide-dock.expanded ~ #architecture-panel.open { left: 250px; }
 .arch-subgroup {
   margin-top: 14px;
   max-height: 520px;
@@ -686,13 +690,13 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   100% { transform: scale(1); opacity: 1; }
 }
 
-.pm-project-meta { font-size: 0.72rem; color: rgba(255,255,255,0.25); letter-spacing: 1px; display: flex; align-items: center; gap: 8px; }
+.pm-project-meta { font-size: 13px; color: rgba(255,255,255,0.25); letter-spacing: 1px; display: flex; align-items: center; gap: 8px; }
 .pm-project-actions { display: flex; gap: 10px; flex-shrink: 0; }
 
 .pm-btn {
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
   color: #fff; padding: 8px 18px; border-radius: 6px; cursor: pointer;
-  font-size: 11px; font-weight: 900; letter-spacing: 2px; transition: all 0.2s;
+  font-size: 12px; font-weight: 900; letter-spacing: 2px; transition: all 0.2s;
   font-family: 'JetBrains Mono', monospace;
 }
 .pm-btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.3); }
@@ -707,9 +711,11 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   display: flex; flex-direction: column; gap: 10px; pointer-events: none;
   background: var(--panel-bg); border: 1px solid var(--border);
   border-radius: 12px; padding: 18px 24px; backdrop-filter: blur(10px);
+  transition: left 0.3s cubic-bezier(0.4,0,0.2,1);
 }
-.leg-row { display: flex; align-items: center; gap: 14px; font-size: 16px; letter-spacing: 1px; }
-.leg-dot { width: 14px; height: 14px; border-radius: 2px; flex-shrink: 0; }
+#ide-dock:hover ~ #legend, #ide-dock.expanded ~ #legend { left: 260px; }
+.leg-row { display: flex; align-items: center; gap: 14px; font-size: 17px; letter-spacing: 1px; }
+.leg-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
 /* ── STATS ── */
 #stats {
@@ -771,13 +777,13 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 }
 .perf-card.normal { background: rgba(0,243,255,0.05); border: 1px solid rgba(0,243,255,0.2); }
 .perf-card.bottleneck { background: rgba(255,80,0,0.08); border: 1px solid rgba(255,80,0,0.5); }
-.perf-card-label { font-size: 13px; letter-spacing: 4px; text-transform: uppercase; opacity: 0.7; margin-bottom: 10px; }
+.perf-card-label { font-size: 14px; letter-spacing: 4px; text-transform: uppercase; opacity: 0.7; margin-bottom: 10px; }
 .perf-time { font-size: 3.2rem; font-weight: 900; line-height: 1; }
-.perf-unit { font-size: 16px; opacity: 0.7; margin-left: 6px; }
-.perf-source { font-size: 13px; opacity: 0.5; margin-top: 8px; letter-spacing: 1.5px; }
+.perf-unit { font-size: 17px; opacity: 0.7; margin-left: 6px; }
+.perf-source { font-size: 14px; opacity: 0.5; margin-top: 8px; letter-spacing: 1.5px; }
 
 .sb-section-title {
-  font-size: 14px; color: #ffffff55; letter-spacing: 4px; text-transform: uppercase;
+  font-size: 15px; color: #ffffff55; letter-spacing: 4px; text-transform: uppercase;
   margin-bottom: 16px; margin-top: 28px; padding-bottom: 10px;
   border-bottom: 1px solid rgba(255,255,255,0.1);
 }
@@ -787,11 +793,11 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   border-radius: 12px; padding: 20px 14px; text-align: center;
 }
 .sb-stat .val { display: block; font-size: 2.6rem; font-weight: bold; color: #fff; line-height: 1; }
-.sb-stat .lbl { font-size: 14px; color: #ffffff66; text-transform: uppercase; letter-spacing: 1px; margin-top: 8px; }
+.sb-stat .lbl { font-size: 15px; color: #ffffff66; text-transform: uppercase; letter-spacing: 1px; margin-top: 8px; }
 
-.meta-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 16px; }
+.meta-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 17px; }
 .meta-row .key { color: #ffffff66; letter-spacing: 1.5px; }
-.meta-row .val { color: #fff; font-size: 18px; }
+.meta-row .val { color: #fff; font-size: 19px; }
 
 #schema-search {
   width: 100%; background: rgba(0,243,255,0.04);
@@ -844,8 +850,9 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   border: 2px solid var(--cyan); background: rgba(0, 0, 0, 0.7);
   color: var(--cyan); display: flex; align-items: center; justify-content: center;
   font-size: 24px; font-weight: bold; cursor: help; backdrop-filter: blur(12px);
-  transition: all 0.3s; animation: help-pulse 2s infinite;
+  transition: left 0.3s cubic-bezier(0.4,0,0.2,1), all 0.3s; animation: help-pulse 2s infinite;
 }
+#ide-dock:hover ~ #help-trigger-left, #ide-dock.expanded ~ #help-trigger-left { left: 260px; }
 @keyframes help-pulse {
   0% { box-shadow: 0 0 0 0 rgba(0, 242, 255, 0.5); }
   70% { box-shadow: 0 0 0 15px rgba(0, 242, 255, 0); }
@@ -859,10 +866,11 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   border-radius: 10px; font-size: 13px; font-weight: 900; letter-spacing: 1.5px;
   white-space: nowrap; pointer-events: none;
   opacity: 0; transform: translateX(-20px);
-  transition: opacity 0.8s ease, transform 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  transition: left 0.3s cubic-bezier(0.4,0,0.2,1), opacity 0.8s ease, transform 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   box-shadow: 0 0 25px rgba(255, 255, 0, 0.5);
   animation: hint-entry 0.8s forwards 0.5s;
 }
+#ide-dock:hover ~ #help-hint, #ide-dock.expanded ~ #help-hint { left: 318px; }
 @keyframes hint-entry { to { opacity: 1; transform: translateX(0); } }
 #help-hint::after {
   content: ''; position: absolute; left: -8px; top: 12px;
@@ -1502,7 +1510,14 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
 
     <div class="settings-section">
       <div class="settings-label">AI Copilot</div>
-      <div class="settings-name" style="margin-bottom:8px;">OpenAI API Key</div>
+      <div class="settings-row" style="margin-bottom:8px;">
+        <div class="settings-name">AI Engine</div>
+        <select id="select-ai-engine" class="arch-select" style="width:140px;">
+          <option value="openai">OpenAI</option>
+          <option value="groq">Groq</option>
+        </select>
+      </div>
+      <div class="settings-name" style="margin-bottom:8px;">API Key</div>
       <input type="password" id="input-openai-key" class="settings-text-input" placeholder="sk-...">
       <button id="btn-save-openai-key" class="settings-inline-btn">SAVE API KEY</button>
       <div class="sla-desc" id="openai-key-status" style="margin-top:8px;">Stored locally in this browser.</div>
@@ -1553,7 +1568,6 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
           <div class="settings-name" style="margin-bottom:8px;">Scale Metric</div>
           <select id="select-swell-metric" class="arch-select">
             <option value="rows">Rows</option>
-            <option value="execution_time">Execution Time</option>
             <option value="code_length">Code Length</option>
             <option value="connections">Total Connections</option>
           </select>
@@ -1571,6 +1585,7 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
         <div class="settings-row" style="margin-top:16px;">
           <div class="settings-name">Yellow Threshold</div>
           <div class="settings-val" id="val-warn-threshold">60%</div>
+          <div class="sla-desc" id="val-warn-threshold-exact" style="margin-top:4px;font-size:12px;color:rgba(255,255,255,0.25);">60 rows</div>
         </div>
         <div class="sla-slider-track">
           <div class="sla-slider-fill" id="fill-warn-threshold" style="width:60%"></div>
@@ -1580,6 +1595,7 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
         <div class="settings-row" style="margin-top:12px;">
           <div class="settings-name">Red Threshold</div>
           <div class="settings-val" id="val-critical-threshold">100%</div>
+          <div class="sla-desc" id="val-critical-threshold-exact" style="margin-top:4px;font-size:12px;color:rgba(255,255,255,0.25);">100 rows</div>
         </div>
         <div class="sla-slider-track">
           <div class="sla-slider-fill" id="fill-critical-threshold" style="width:100%"></div>

@@ -65,5 +65,57 @@ export const State = {
     this[key] = value;
     this.emit('change:' + key, value);
     this.emit('change', { key, value });
+    
+    // Persist certain keys to localStorage
+    const persistentKeys = [
+      'dataVolumeMode',
+      'dataSwellMetric',
+      'dataSwellIntensity',
+      'autoAdjustThreshold',
+      'referenceThreshold',
+      'swellWarnThresholdPct',
+      'swellCriticalThresholdPct',
+      'perfMode',
+      'neonIntensity',
+      'showLabels',
+      'showParticles'
+    ];
+    
+    if (persistentKeys.includes(key)) {
+      try {
+        localStorage.setItem('dagcity_' + key, JSON.stringify(value));
+      } catch(e) {
+        console.warn('[State] Failed to persist to localStorage:', e);
+      }
+    }
+  },
+  
+  // Load persisted values from localStorage
+  loadPersisted() {
+    const persistentKeys = [
+      'dataVolumeMode',
+      'dataSwellMetric',
+      'dataSwellIntensity',
+      'autoAdjustThreshold',
+      'referenceThreshold',
+      'swellWarnThresholdPct',
+      'swellCriticalThresholdPct',
+      'perfMode',
+      'neonIntensity',
+      'showLabels',
+      'showParticles'
+    ];
+    
+    persistentKeys.forEach(key => {
+      try {
+        const stored = localStorage.getItem('dagcity_' + key);
+        if (stored !== null) {
+          const value = JSON.parse(stored);
+          this[key] = value;
+        }
+      } catch(e) {
+        console.warn('[State] Failed to load persisted value for', key, ':', e);
+      }
+    });
   }
 };

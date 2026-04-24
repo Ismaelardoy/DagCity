@@ -275,12 +275,14 @@ async function handleAiSubmit() {
 
 export function initAiCopilot() {
   const dockAi = document.getElementById('dock-ai');
+  const dockEl = document.getElementById('ide-dock');
   const closeAi = document.getElementById('ai-close');
   const sendBtn = document.getElementById('ai-chat-send');
   const inputEl = document.getElementById('ai-chat-input');
   const keyInput = document.getElementById('input-openai-key');
   const saveKeyBtn = document.getElementById('btn-save-openai-key');
   const keyStatus = document.getElementById('openai-key-status');
+  const engineSelect = document.getElementById('select-ai-engine');
 
   if (dockAi) dockAi.addEventListener('click', toggleAiPanel);
   if (closeAi) closeAi.addEventListener('click', toggleAiPanel);
@@ -291,6 +293,13 @@ export function initAiCopilot() {
         e.preventDefault();
         handleAiSubmit();
       }
+    });
+  }
+
+  if (engineSelect) {
+    engineSelect.value = aiClient.getProvider();
+    engineSelect.addEventListener('change', () => {
+      aiClient.setProvider(engineSelect.value);
     });
   }
 
@@ -431,7 +440,7 @@ function initArchitecturePanel() {
         Math.max(1, ((n.columns || []).length * 2500) + ((n.name || '').length * 500));
     }
     if (metric === 'connections') {
-      return Math.max(1, ((n.upstream || []).length + (n.downstream || []).length) * 50000);
+      return Math.max(1, ((n.upstream || []).length + (n.downstream || []).length));
     }
     return Math.max(1, toNum(n.execution_time) * 100000);
   };
@@ -532,6 +541,21 @@ function initArchitecturePanel() {
       const mode = auto ? 'AUTO' : 'MANUAL';
       autoThresholdHint.textContent = `${mode} · Max project value: ${Math.round(State.autoMaxThreshold || 1).toLocaleString()}`;
     }
+    const warnExactEl = document.getElementById('val-warn-threshold-exact');
+    const criticalExactEl = document.getElementById('val-critical-threshold-exact');
+    const refThreshold = Math.max(1, Number(State.referenceThreshold || State.autoMaxThreshold || 1));
+    const warnPct = Math.max(10, Math.min(95, Number(State.swellWarnThresholdPct) || 60));
+    const criticalPct = Math.max(warnPct + 1, Math.min(200, Number(State.swellCriticalThresholdPct) || 100));
+    const currentMetric = State.dataSwellMetric || 'rows';
+    const unit = getMetricUnit(currentMetric);
+    if (warnExactEl) {
+      const warnExactValue = Math.round((warnPct / 100) * refThreshold);
+      warnExactEl.textContent = `${warnExactValue.toLocaleString()} ${unit}`;
+    }
+    if (criticalExactEl) {
+      const criticalExactValue = Math.round((criticalPct / 100) * refThreshold);
+      criticalExactEl.textContent = `${criticalExactValue.toLocaleString()} ${unit}`;
+    }
   };
 
   const refreshAutoThreshold = () => {
@@ -564,6 +588,7 @@ function initArchitecturePanel() {
     metricSelect.addEventListener('change', () => {
       State.set('dataSwellMetric', metricSelect.value);
       refreshAutoThreshold();
+      syncThresholdUi();
       updateSelectedMetricPreview();
     });
   }
@@ -612,6 +637,15 @@ function initArchitecturePanel() {
     intensityInput.addEventListener('input', () => syncIntensity(intensityInput.value));
   }
 
+  const getMetricUnit = (metric) => {
+    switch (metric) {
+      case 'rows': return 'rows';
+      case 'code_length': return 'chars';
+      case 'connections': return 'connections';
+      default: return 'units';
+    }
+  };
+
   const syncWarnThreshold = (raw) => {
     const val = Math.max(10, Math.min(95, Number(raw) || 60));
     if ((Number(State.swellCriticalThresholdPct) || 100) <= val) {
@@ -629,6 +663,14 @@ function initArchitecturePanel() {
       const warnPct = ((val - 10) / 85) * 100;
       warnFill.style.width = Math.max(0, Math.min(100, warnPct)) + '%';
     }
+    const warnExactEl = document.getElementById('val-warn-threshold-exact');
+    if (warnExactEl) {
+      const refThreshold = Math.max(1, Number(State.referenceThreshold || State.autoMaxThreshold || 1));
+      const exactValue = Math.round((val / 100) * refThreshold);
+      const currentMetric = State.dataSwellMetric || 'rows';
+      const unit = getMetricUnit(currentMetric);
+      warnExactEl.textContent = `${exactValue.toLocaleString()} ${unit}`;
+    }
     syncThresholdLegend();
     updateSelectedMetricPreview();
   };
@@ -641,6 +683,14 @@ function initArchitecturePanel() {
     if (criticalFill) {
       const criticalPct = ((val - 20) / 180) * 100;
       criticalFill.style.width = Math.max(0, Math.min(100, criticalPct)) + '%';
+    }
+    const criticalExactEl = document.getElementById('val-critical-threshold-exact');
+    if (criticalExactEl) {
+      const refThreshold = Math.max(1, Number(State.referenceThreshold || State.autoMaxThreshold || 1));
+      const exactValue = Math.round((val / 100) * refThreshold);
+      const currentMetric = State.dataSwellMetric || 'rows';
+      const unit = getMetricUnit(currentMetric);
+      criticalExactEl.textContent = `${exactValue.toLocaleString()} ${unit}`;
     }
     syncThresholdLegend();
     updateSelectedMetricPreview();
