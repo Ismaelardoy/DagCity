@@ -200,6 +200,23 @@ input[type=range].sla-input::-webkit-slider-thumb {
 .sla-del { color: var(--red); cursor: pointer; font-size: 16px; padding: 4px 8px; flex-shrink: 0; }
 .sla-del:hover { text-shadow: 0 0 8px var(--red); }
 
+/* Toggle Switch */
+.sla-toggle-container { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.switch { position: relative; display: inline-block; width: 34px; height: 18px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: .4s; border-radius: 34px; }
+.slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 2px; bottom: 2px; background-color: #fff; transition: .4s; border-radius: 50%; }
+input:checked + .slider { background-color: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+input:checked + .slider:before { transform: translateX(16px); }
+
+.sla-inherit-text { font-size: 11px; color: rgba(255,255,255,0.4); font-style: italic; margin-top: 4px; }
+
+.add-override-btn {
+  background: rgba(0, 242, 255, 0.05); border: 1px dashed rgba(0,242,255,0.4); color: var(--cyan);
+  padding: 8px; text-align: center; border-radius: 4px; cursor: pointer; font-size: 12px; transition: 0.2s;
+}
+.add-override-btn:hover { background: rgba(0, 242, 255, 0.15); border-color: var(--cyan); }
+
 /* ── SETTINGS PANEL ── */
 #settings-panel {
   display: none;
@@ -982,7 +999,8 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
     </div>
     <div class="sla-section">
       <div class="sla-label">Custom Node Overrides</div>
-      <input type="text" id="sla-node-search" placeholder="🔍  Search node name…">
+      <div id="add-node-override-btn" class="add-override-btn">+ Add Specific Node Override</div>
+      <input type="text" id="sla-node-search" placeholder="🔍  Search node name…" style="display:none; margin-top:8px;">
       <div id="sla-node-results"></div>
       <div id="sla-overrides-list"></div>
     </div>

@@ -168,28 +168,56 @@ export function renderZoneSliders() {
     return;
   }
   container.innerHTML = layers.map(l => {
-    const val = State.slaZones[l] ?? State.userDefinedSLA;
+    const isActive = State.slaZones[l] !== undefined;
+    const val = isActive ? State.slaZones[l] : State.userDefinedSLA;
     const pct = Math.round((val / 1000) * 100);
-    return `<div class="zone-row">
-      <div class="zone-name">${l.toUpperCase()}</div>
-      <div class="sla-row">
-        <div class="sla-name" style="font-size:12px">Override</div>
-        <div class="sla-val" id="zone-val-${l}" style="font-size:16px" contenteditable="true">${val}s</div>
+    
+    return `<div class="zone-row" style="margin-bottom: 16px;">
+      <div class="sla-toggle-container">
+        <div class="zone-name" style="margin:0">${l.toUpperCase()}</div>
+        <label class="switch">
+          <input type="checkbox" onchange="window._toggleZoneSLA('${l}', this.checked)" ${isActive ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
       </div>
-      <div class="sla-slider-track">
-        <div class="sla-slider-fill" id="zone-fill-${l}" style="width:${pct}%"></div>
-        <input type="range" class="sla-input" id="zone-slider-${l}" min="0" max="1000" value="${val}" oninput="window._onZoneSLA('${l}', this.value)">
+      
+      ${isActive ? `
+      <div id="zone-controls-${l}">
+        <div class="sla-row">
+          <div class="sla-name" style="font-size:12px">Override</div>
+          <div class="sla-val" id="zone-val-${l}" style="font-size:16px" contenteditable="true">${val}s</div>
+        </div>
+        <div class="sla-slider-track">
+          <div class="sla-slider-fill" id="zone-fill-${l}" style="width:${pct}%"></div>
+          <input type="range" class="sla-input" id="zone-slider-${l}" min="0" max="1000" value="${val}" oninput="window._onZoneSLA('${l}', this.value)">
+        </div>
       </div>
+      ` : `
+      <div class="sla-inherit-text" id="zone-inherit-${l}">Inheriting Global SLA (${State.userDefinedSLA}s)</div>
+      `}
     </div>`;
   }).join('');
   layers.forEach(l => {
     const el = document.getElementById(`zone-val-${l}`);
-    handleManualSLAInput(el, v => {
-      const slider = document.getElementById(`zone-slider-${l}`); if (slider) slider.value = v;
-      onZoneSLA(l, v);
-    });
+    if (el) {
+      handleManualSLAInput(el, v => {
+        const slider = document.getElementById(`zone-slider-${l}`); if (slider) slider.value = v;
+        onZoneSLA(l, v);
+      });
+    }
   });
 }
+
+window._toggleZoneSLA = (layer, active) => {
+  if (active) {
+    State.slaZones[layer] = State.userDefinedSLA;
+  } else {
+    delete State.slaZones[layer];
+  }
+  updateFires();
+  saveSLAToProject();
+  renderZoneSliders();
+};
 
 export function renderNodeOverrides() {
   const list = document.getElementById('sla-overrides-list');
@@ -608,15 +636,32 @@ export function initSLA() {
 
   const searchEl  = document.getElementById('sla-node-search');
   const resultsEl = document.getElementById('sla-node-results');
-  searchEl.addEventListener('input', () => {
-    const q = searchEl.value.toLowerCase().trim();
-    if (!q) { resultsEl.innerHTML = ''; return; }
-    const raw = State.raw;
-    const hits = (raw && raw.nodes ? raw.nodes : []).filter(n => n.name.toLowerCase().includes(q)).slice(0,8);
-    resultsEl.innerHTML = hits.map(h => `<div class="sla-result-row" onclick="window._addNodeSLA('${h.id}')">${h.name}<span style="color:#666;margin-left:8px;font-size:11px">${h.layer||''}</span></div>`).join('');
-  });
+  const addBtn    = document.getElementById('add-node-override-btn');
+  
+  if (addBtn && searchEl) {
+    addBtn.addEventListener('click', () => {
+      addBtn.style.display = 'none';
+      searchEl.style.display = 'block';
+      searchEl.focus();
+    });
+  }
 
-  window._addNodeSLA = addNodeSLA;
+  if (searchEl) {
+    searchEl.addEventListener('input', () => {
+      const q = searchEl.value.toLowerCase().trim();
+      if (!q) { resultsEl.innerHTML = ''; return; }
+      const raw = State.raw;
+      const hits = (raw && raw.nodes ? raw.nodes : []).filter(n => n.name.toLowerCase().includes(q)).slice(0,8);
+      resultsEl.innerHTML = hits.map(h => `<div class="sla-result-row" onclick="window._addNodeSLA('${h.id}')">${h.name}<span style="color:#666;margin-left:8px;font-size:11px">${h.layer||''}</span></div>`).join('');
+    });
+  }
+
+  window._addNodeSLA = (id) => {
+    addNodeSLA(id);
+    if (addBtn) addBtn.style.display = 'block';
+    if (searchEl) { searchEl.style.display = 'none'; searchEl.value = ''; }
+    if (resultsEl) resultsEl.innerHTML = '';
+  };
 }
 
 // ── HUD Logic ─────────────────────────────────────────
