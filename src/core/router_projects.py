@@ -30,15 +30,21 @@ async def list_projects():
             continue
         meta_path = os.path.join(project_dir, "meta.json")
         meta = {}
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                meta = json.load(f)
-        projects.append({
-            "name": name,
-            "node_count": meta.get("node_count", 0),
-            "created_at": meta.get("created_at", ""),
-            "source": meta.get("source", "offline")
-        })
+        try:
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    meta = json.load(f)
+            
+            projects.append({
+                "name": name,
+                "node_count": meta.get("node_count", 0),
+                "created_at": meta.get("created_at", ""),
+                "source": meta.get("source", "offline")
+            })
+        except Exception as e:
+            print(f"[ERROR] Failed to load project metadata for {name}: {e}")
+            # Skip corrupted project
+            continue
     return projects
 
 @router.get("/{name}")
@@ -111,4 +117,15 @@ async def delete_project(name: str):
     if not os.path.isdir(project_dir):
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
     shutil.rmtree(project_dir)
+    
+    # Clear active project if we just deleted it
+    if os.path.exists(WORKSPACE_PATH):
+        try:
+            with open(WORKSPACE_PATH, "r") as f:
+                data = json.load(f)
+            if data.get("active_project") == name:
+                _set_workspace_active_project(None)
+        except Exception:
+            pass
+
     return {"deleted": True, "name": name}

@@ -207,8 +207,6 @@ export async function connectLocal() {
 
     if (data.status === 'ready') {
       if (lpStatus) lpStatus.textContent = '✓ LIVE MANIFEST DETECTED';
-      // Fetch and launch the city immediately
-      const graphRes = await fetch('/api/upload', { method: 'POST' }).catch(() => null);
       // Assassin's Creed-style: parse the external manifest directly
       const launchRes = await fetch('/api/launch-local', { method: 'POST' });
       if (launchRes.ok) {
@@ -253,9 +251,9 @@ export async function initLivePipelineStatus() {
         btn.style.borderColor = '#39ff14';
       }
       
-      // Zero-Friction: If it's ready on boot, connect automatically
-      console.log('[🔗] Auto-detecting live volume. Launching...');
-      connectLocal();
+      // Zero-Friction: We no longer auto-connect on boot to allow users to see the landing screen
+      console.log('[🔗] Live volume detected. Waiting for manual connection...');
+      // connectLocal(); // Disabled auto-connect
     } else {
       lpStatus.textContent = '❌ MANIFEST NOT FOUND — CLICK FOR HELP';
       lpStatus.style.color = '#ff4444';

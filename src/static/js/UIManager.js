@@ -410,11 +410,19 @@ async function loadProject(name) {
 }
 
 async function deleteProject(name) {
+  if (!confirm(`Are you sure you want to delete the project '${name}'?`)) {
+    return;
+  }
+  
   const active = localStorage.getItem('dagcity_active_project');
   try {
     await fetch('/api/projects/' + encodeURIComponent(name), { method: 'DELETE' });
-    if (active === name) localStorage.removeItem('dagcity_active_project');
-    openProjectModal();
+    if (active === name) {
+      localStorage.removeItem('dagcity_active_project');
+      startNewProject();
+    } else {
+      openProjectModal();
+    }
   } catch(e) { console.error('[📁] Failed to delete project:', e); }
 }
 

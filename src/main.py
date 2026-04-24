@@ -43,16 +43,9 @@ viz = VizGenerator()
 watcher: Optional[ManifestWatcher] = None
 
 def _get_current_graph() -> Dict:
-    """Helper to get the most recent graph data from disk."""
-    if not os.path.exists(EXTERNAL_MANIFEST_PATH):
-        return _build_empty_graph()
-    try:
-        parser = ManifestParser(EXTERNAL_MANIFEST_PATH)
-        return parser.parse()
-
-    except Exception as e:
-        print(f"[ERROR] Failed to parse manifest on the fly: {e}", file=sys.stderr)
-        return _build_empty_graph()
+    """Helper to get the most recent graph data from disk. 
+    Always returns empty if no active project is set, to force the UI Landing screen."""
+    return _build_empty_graph()
 
 def _build_empty_graph() -> dict:
     return {
@@ -116,16 +109,46 @@ async def launch_local():
         
         # 2. Auto-persist internally so we can save SLAs etc.
         project_name = _autodiscover_project_name(m_dict)
+        
+        # Check for collisions and increment name if needed (to avoid overwriting snapshots)
+        base_name = project_name
+        counter = 1
+        while os.path.exists(os.path.join(PROJECTS_DIR, project_name)):
+            # If it's already a live_sync project, we might want to overwrite it 
+            # but to be safe and match user expectation of "creating" a project, let's increment
+            # unless it's the EXACT same project name and source.
+            meta_path = os.path.join(PROJECTS_DIR, project_name, "meta.json")
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    old_meta = json.load(f)
+                    if old_meta.get("source") == "live_sync":
+                        break # Overwrite existing live sync project of same name
+            
+            project_name = f"{base_name}_{counter}"
+            counter += 1
+
         project_dir = os.path.join(PROJECTS_DIR, project_name)
         os.makedirs(project_dir, exist_ok=True)
         
+        # Save graph for immediate UI use
         with open(os.path.join(project_dir, "graph.json"), "w") as f:
             json.dump(graph_data, f)
+            
+        # Also save the source manifest for full persistence
+        with open(os.path.join(project_dir, "manifest.json"), "w") as f:
+            json.dump(m_dict, f)
+            
+        if rr_dict:
+            with open(os.path.join(project_dir, "run_results.json"), "w") as f:
+                json.dump(rr_dict, f)
+
+        # Save metadata for Project Manager
         with open(os.path.join(project_dir, "meta.json"), "w") as f:
             json.dump({
                 "node_count": len(graph_data.get("nodes", [])),
                 "created_at": datetime.now().isoformat(),
-                "source": "live_sync"
+                "source": "live_sync",
+                "original_path": EXTERNAL_MANIFEST_PATH
             }, f)
             
         _set_workspace_active_project(project_name)
