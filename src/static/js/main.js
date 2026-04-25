@@ -14,13 +14,6 @@ import {
   renderZoneSliders, renderNodeOverrides, loadSLAFromProject
 } from './UIManager.js';
 import { initLiveSync, autoRestoreProject, connectLocal, initLivePipelineStatus } from './DataManager.js';
-import {
-  initDAGView2D,
-  rebuildDAGView2D,
-  showDAGView2D,
-  hideDAGView2D,
-  focusNode2D,
-} from './DAGView2D.js';
 
 // Load persisted configuration from localStorage
 State.loadPersisted();
@@ -44,19 +37,10 @@ function applyViewMode(mode) {
   if (btn3d) btn3d.classList.toggle('active', resolved === '3d');
 
   const canvasContainer = document.getElementById('canvas-container');
-  if (canvasContainer) canvasContainer.style.display = resolved === '3d' ? 'block' : 'none';
+  if (canvasContainer) canvasContainer.style.display = 'block';
 
-  if (resolved === '2d') {
-    showDAGView2D();
-  } else {
-    hideDAGView2D();
-  }
-
-  const selected = State.selectedNode;
-  if (selected) {
-    if (resolved === '3d') flyToNode(selected.name || selected.id);
-    else focusNode2D(selected.name || selected.id);
-  }
+  const graph2d = document.getElementById('graph2d-container');
+  if (graph2d) graph2d.style.display = 'none';
 }
 
 function scoreNodeMatch(query, node) {
@@ -121,8 +105,7 @@ function initOmniSearch() {
   const chooseNode = (node) => {
     if (!node) return;
     State.set('selectedNode', node);
-    if (State.viewMode === '2d') focusNode2D(node.name || node.id);
-    else flyToNode(node.name || node.id);
+    flyToNode(node.name || node.id);
     modal.classList.remove('open');
   };
 
@@ -185,22 +168,6 @@ function initOmniSearch() {
 }
 
 function initViewToggle() {
-  const btn2d = document.getElementById('view-mode-2d');
-  const btn3d = document.getElementById('view-mode-3d');
-  if (btn2d) btn2d.addEventListener('click', () => applyViewMode('2d'));
-  if (btn3d) btn3d.addEventListener('click', () => applyViewMode('3d'));
-
-  State.on('city:rebuilt', (payload) => {
-    rebuildDAGView2D(payload);
-  });
-  State.on('change:selectedNode', (node) => {
-    if (!node) return;
-    if (State.viewMode === '2d') {
-      focusNode2D(node.name || node.id);
-      import('./UIManager.js').then(({ openSidebar }) => openSidebar(node));
-    }
-  });
-
   applyViewMode(State.viewMode || '3d');
 }
 
@@ -241,7 +208,6 @@ if (AWAITING_DATA) {
   });
   RAW.nodes.forEach(n => buildBuilding(n));
   RAW.links.forEach(l => buildEdge(l));
-  initDAGView2D(RAW);
 
   // Load SLA after building the city
   loadSLAFromProject(RAW);

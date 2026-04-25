@@ -77,6 +77,31 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   text-shadow: 0 0 10px rgba(0,243,255,0.45);
 }
 
+#btn-global-view {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 260;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(0,243,255,0.45);
+  background: rgba(6,14,24,0.82);
+  color: #e9f9ff;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+#btn-global-view:hover {
+  border-color: rgba(140,245,255,0.8);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.4), 0 0 18px rgba(0,243,255,0.28);
+}
+
 #omni-launch {
   position: fixed;
   top: 164px;
@@ -1155,6 +1180,8 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   <button class="view-pill active" id="view-mode-3d">3D CITY</button>
 </div>
 
+<button id="btn-global-view" type="button" title="Vista Global" aria-label="Vista Global">🌎</button>
+
 <button id="omni-launch">⌘/Ctrl + K · Jump to model…</button>
 <div id="omni-modal">
   <div id="omni-card">
@@ -1394,6 +1421,10 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
         <div class="fire-num" id="sla-fire-count">0</div>
         <div class="fire-label">NODES<br>ON FIRE</div>
       </div>
+      <div class="sla-fire-count" style="margin-top: 8px;">
+        <div class="fire-num" id="fps-counter">60</div>
+        <div class="fire-label">FPS</div>
+      </div>
     </div>
     <div class="sla-section">
       <div class="sla-label">Thermal VFX Sensitivity</div>
@@ -1472,6 +1503,7 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
       <div class="sla-desc" style="margin-top:-5px;margin-bottom:20px;">Smooth cinematic orbit around the city</div>
 
       <button class="settings-action-btn" id="btn-reset-view">RESET VIEW</button>
+      <button class="settings-action-btn" id="btn-global-view-settings" style="margin-top:10px;">🌎 VISTA GLOBAL</button>
     </div>
 
     <div class="settings-section">

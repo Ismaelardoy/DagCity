@@ -5,11 +5,10 @@ import { State } from './State.js';
 import {
   meshes, nodeMeshMap, edgeObjs, nodeMap,
   applySelection, applyBlastRadius, resetSelection, tweenCamera, updateFires, rebuildCity, flyToNode,
-  makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics
+  makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics, getRaycastTargets, zoomToFitAll, GLOBAL_VIEW_FLIGHT_MS
 } from './CityEngine.js';
-import { controls, camera, INIT_CAM, composer } from './Visualizer.js';
+import { controls, camera, composer } from './Visualizer.js';
 import { aiClient } from './AIClient.js';
-import { focusNode2D } from './DAGView2D.js';
 
 
 // ── Sidebar ────────────────────────────────────────────
@@ -239,9 +238,7 @@ function renderAiMessages() {
 
 function triggerFocusAction(target) {
   if (!target) return;
-  const mode = State.viewMode || '3d';
-  if (mode === '2d') focusNode2D(target);
-  else flyToNode(target);
+  flyToNode(target);
 }
 
 async function handleAiSubmit() {
@@ -344,7 +341,17 @@ export function initSettings() {
   const btnResetView = document.getElementById('btn-reset-view');
   if (btnResetView) {
     btnResetView.addEventListener('click', () => {
-      tweenCamera(INIT_CAM, {x:0,y:0,z:0}, 1200);
+      zoomToFitAll(GLOBAL_VIEW_FLIGHT_MS);
+      setAutoRotateEnabled(true, false);
+      if (sidebar) sidebar.classList.remove('open');
+      resetSelection();
+    });
+  }
+
+  const btnGlobalViewSettings = document.getElementById('btn-global-view-settings');
+  if (btnGlobalViewSettings) {
+    btnGlobalViewSettings.addEventListener('click', () => {
+      zoomToFitAll(GLOBAL_VIEW_FLIGHT_MS);
       setAutoRotateEnabled(true, false);
       if (sidebar) sidebar.classList.remove('open');
       resetSelection();
@@ -1194,15 +1201,26 @@ export function initRaycaster(renderer, camera) {
   const tooltip  = document.getElementById('tooltip');
   let hoveredBuilding = null;
 
-  renderer.domElement.addEventListener('mousemove', e => {
-    mouse.x = (e.clientX/window.innerWidth)*2-1;
-    mouse.y = -(e.clientY/window.innerHeight)*2+1;
+  // ── Hover raycasting (rAF-throttled) ────────────────
+  // Mousemove can fire 100+ times/sec; intersecting hundreds of meshes that
+  // often saturated the CPU. We coalesce events: store latest pointer state
+  // and resolve at most once per animation frame.
+  let pendingClientX = 0, pendingClientY = 0;
+  let hoverFramePending = false;
+
+  function resolveHover() {
+    hoverFramePending = false;
+    mouse.x = (pendingClientX/window.innerWidth)*2-1;
+    mouse.y = -(pendingClientY/window.innerHeight)*2+1;
     raycaster.setFromCamera(mouse, camera);
-    const hits = raycaster.intersectObjects(meshes, true);
+    const hits = raycaster.intersectObjects(getRaycastTargets(), true);
     let foundNode = null, foundMesh = null;
     for (const h of hits) {
       foundNode = findNodeInHierarchy(h.object);
-      if (foundNode) { let o = h.object; while(o && !meshes.includes(o)) o = o.parent; foundMesh = o; break; }
+      if (foundNode) {
+        foundMesh = nodeMeshMap[foundNode.id] || h.object;
+        break;
+      }
     }
     if (hoveredBuilding && hoveredBuilding !== foundMesh) {
       hoveredBuilding.userData.isHovered = false;
@@ -1211,12 +1229,21 @@ export function initRaycaster(renderer, camera) {
     if (foundNode) {
       if (foundMesh) { foundMesh.userData.isHovered = true; hoveredBuilding = foundMesh; }
       tooltip.style.display = 'block';
-      tooltip.style.left = (e.clientX+15)+'px'; tooltip.style.top = (e.clientY-38)+'px';
+      tooltip.style.left = (pendingClientX+15)+'px'; tooltip.style.top = (pendingClientY-38)+'px';
       tooltip.style.color = foundNode.color;
       tooltip.innerHTML = `<strong>${foundNode.name}</strong><br><span style="color:#555;font-size:11px">${foundNode.layer.toUpperCase()} · ${foundNode.execution_time?.toFixed(2)}s</span>`;
       renderer.domElement.style.cursor = 'pointer';
     } else {
       tooltip.style.display = 'none'; renderer.domElement.style.cursor = 'default';
+    }
+  }
+
+  renderer.domElement.addEventListener('mousemove', e => {
+    pendingClientX = e.clientX;
+    pendingClientY = e.clientY;
+    if (!hoverFramePending) {
+      hoverFramePending = true;
+      requestAnimationFrame(resolveHover);
     }
   });
 
@@ -1228,7 +1255,7 @@ export function initRaycaster(renderer, camera) {
     mouse.x = (e.clientX/window.innerWidth)*2-1;
     mouse.y = -(e.clientY/window.innerHeight)*2+1;
     raycaster.setFromCamera(mouse, camera);
-    const hits = raycaster.intersectObjects(meshes, false);
+    const hits = raycaster.intersectObjects(getRaycastTargets(), true);
     let found = null;
     for (const h of hits) { found = findNodeInHierarchy(h.object); if(found) break; }
     if (found) {

@@ -6,9 +6,36 @@ import { State } from './State.js';
 
 // Exported references used by other modules
 export let scene, camera, renderer, controls, composer, bloomPass;
+export let perspectiveCamera, orthoCamera;
+export let isOrthoActive = false;
 
 console.log('[Visualizer] Module loaded.');
 export const INIT_CAM = { x: 0, y: 110, z: 280 };
+const ORTHO_FRUSTUM_SIZE = 2600;
+
+function _configureOrthoCamera() {
+  if (!orthoCamera) return;
+  const nw = window.innerWidth;
+  const nh = Math.max(1, window.innerHeight);
+  const aspect = nw / nh;
+  const halfH = ORTHO_FRUSTUM_SIZE * 0.5;
+  const halfW = halfH * aspect;
+  orthoCamera.left = -halfW;
+  orthoCamera.right = halfW;
+  orthoCamera.top = halfH;
+  orthoCamera.bottom = -halfH;
+  orthoCamera.updateProjectionMatrix();
+}
+
+export function setCameraMode(useOrtho) {
+  if (!perspectiveCamera || !orthoCamera) return;
+  isOrthoActive = !!useOrtho;
+  camera = isOrthoActive ? orthoCamera : perspectiveCamera;
+  if (controls) {
+    controls.object = camera;
+    controls.update();
+  }
+}
 
 
 export function initScene() {
@@ -34,8 +61,15 @@ export function initScene() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000408);
 
-  camera = new THREE.PerspectiveCamera(55, W / H, 0.1, 5000);
-  camera.position.set(INIT_CAM.x, INIT_CAM.y, INIT_CAM.z);
+  perspectiveCamera = new THREE.PerspectiveCamera(55, W / H, 0.1, 5000);
+  perspectiveCamera.position.set(INIT_CAM.x, INIT_CAM.y, INIT_CAM.z);
+
+  orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 9000);
+  _configureOrthoCamera();
+  orthoCamera.position.set(0, 5000, 0);
+  orthoCamera.lookAt(0, 0, 0);
+
+  camera = perspectiveCamera;
 
   // Check for OrbitControls (can be in THREE.OrbitControls or global OrbitControls)
   const OrbitCtrl = THREE.OrbitControls || window.OrbitControls;
@@ -74,8 +108,11 @@ export function initScene() {
   // Resize handler
   window.addEventListener('resize', () => {
     const nw = window.innerWidth, nh = window.innerHeight;
-    camera.aspect = nw / nh;
-    camera.updateProjectionMatrix();
+    if (perspectiveCamera) {
+      perspectiveCamera.aspect = nw / nh;
+      perspectiveCamera.updateProjectionMatrix();
+    }
+    _configureOrthoCamera();
     renderer.setSize(nw, nh);
     if (composer) composer.setSize(nw, nh);
   });

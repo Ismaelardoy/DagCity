@@ -2,9 +2,10 @@
 // CityEngine.js — Buildings, Edges, Fire, Animation Loop
 // ═══════════════════════════════════════════════════════
 import { State } from './State.js';
+import * as Visualizer from './Visualizer.js';
 import {
   scene, camera, renderer, controls, 
-  initScene, INIT_CAM, composer
+  initScene, INIT_CAM, composer, bloomPass,
 } from './Visualizer.js';
 import { VFXManager } from './VFXManager.js';
 
@@ -13,6 +14,725 @@ let labelRenderer = null;
 
 let vfxManager = null;
 const clock = new THREE.Clock();
+
+// ── Island parent helper ──
+function _islandParent(groupName) {
+  const key = groupName || 'default';
+  if (!islandGroups[key]) {
+    const g = new THREE.Group();
+    g.name = 'island_' + key;
+    g.userData.islandKey = key;
+    islandGroups[key] = g;
+    scene.add(g);
+  }
+  return islandGroups[key];
+}
+
+// ── Reusable temp objects (avoid per-frame allocations) ──
+const _tmpColor = new THREE.Color();
+const _tmpVec3 = new THREE.Vector3();
+const _tmpVec3b = new THREE.Vector3();
+const _vfxBucket = [null]; // reusable single-element array for vfxManager.update
+let _frameCount = 0;
+
+// ── FPS Tracking ──
+let _lastTime = performance.now();
+let _frameCountSinceLastUpdate = 0;
+const _fpsUpdateInterval = 500; // Update FPS display every 500ms
+
+// ── Island grouping & culling ──
+const islandGroups = {};            // group_name -> THREE.Group
+const islandMeta = {};              // group_name -> { center: Vector3, radius: number }
+let globalArcsGroup = null;         // holds inter-island arcs (never culled)
+let MAX_RENDER_DISTANCE = 6000;     // beyond this, hide island entirely (mutated by DRS)
+const CULL_INTERVAL_FRAMES = 10;    // re-evaluate visibility every N frames
+let _cullFrameCounter = 0;
+let _cullDirty = true;              // forces recompute (e.g. after rebuild or controls change)
+let _suspendSectorCulling = false;
+let _forceFullRenderUntilMs = 0;
+const _frustum = new THREE.Frustum();
+const _projScreenMatrix = new THREE.Matrix4();
+const _islandSphere = new THREE.Sphere();
+
+// ── Intelligent Rendering ──
+let needsUpdate = true;
+let _lastControlChangeTime = 0;
+let _drsWarmupUntilMs = 0;
+let _wasIdleLastFrame = false;
+let isSystemAnimating = false;
+let _lastSystemAnimEndMs = 0;
+let _drsDisabledUntilMs = 0; // DRS completely disabled until this time
+const MIN_CAMERA_FAR = 1200;
+const MIN_RENDER_DISTANCE = 800;
+const MIN_GLOBAL_DISTANCE = 2400;
+
+// ── LOD (Level of Detail) System ─────────────────────
+const LOD_NEAR_DISTANCE = 500;    // Full 3D geometry
+const LOD_MEDIUM_DISTANCE = 1500; // Simplified geometry
+const LOD_FAR_DISTANCE = 3000;    // Billboard imposters
+let lodEnabled = true;
+
+// ── Billboard Imposter System ─────────────────────────
+// Simple colored sprites for distant nodes to reduce draw calls
+const imposterGroup = new THREE.Group();
+imposterGroup.name = 'imposters';
+
+// ── Clustering System for 2D Schematic Mode ─────────────
+let clusterGroups = [];
+const CLUSTER_DISTANCE_THRESHOLD = 80; // Units for clustering
+let clusterZoomLevel = 1.0;
+
+function updateClusters() {
+  if (!is2DMode || !diagramNodeTargets.length) return;
+  
+  // Simple clustering based on spatial proximity
+  const clusters = [];
+  const visited = new Set();
+  
+  for (let i = 0; i < diagramNodeTargets.length; i++) {
+    const sprite = diagramNodeTargets[i];
+    if (visited.has(sprite.uuid)) continue;
+    
+    const node = sprite.userData.node;
+    if (!node) continue;
+    
+    const cluster = { nodes: [node], center: new THREE.Vector3(sprite.position.x, sprite.position.y, sprite.position.z), sprite };
+    visited.add(sprite.uuid);
+    
+    // Find nearby nodes
+    for (let j = i + 1; j < diagramNodeTargets.length; j++) {
+      const otherSprite = diagramNodeTargets[j];
+      if (visited.has(otherSprite.uuid)) continue;
+      
+      const dist = sprite.position.distanceTo(otherSprite.position);
+      if (dist < CLUSTER_DISTANCE_THRESHOLD / clusterZoomLevel) {
+        cluster.nodes.push(otherSprite.userData.node);
+        cluster.center.add(otherSprite.position);
+        visited.add(otherSprite.uuid);
+      }
+    }
+    
+    cluster.center.divideScalar(cluster.nodes.length);
+    clusters.push(cluster);
+  }
+  
+  clusterGroups = clusters;
+}
+
+// ── Radar HUD (2D dynamic minimap) ───────────────────
+const islandFireState = {}; // islandKey -> boolean
+let radarContainer = null;
+let radarCanvas = null;
+let radarCtx = null;
+const RADAR_SIZE = 200;
+const RADAR_PADDING = 22;
+const RADAR_CLICK_RADIUS = 12;
+
+// ── View mode (3D / 2D orthographic) ─────────────────
+let is2DMode = false;
+let viewModeToggleBtn = null;
+let viewMode3DBtn = null;
+let globalViewBtn = null;
+let viewModeHotkeyBound = false;
+let sceneBackground3D = null;
+
+// ── 2D Schematic Mode (Canvas Overlay) ─────────────────
+let schematicCanvas = null;
+let schematicCtx = null;
+let schematicOverlay = null;
+let schematicVisible = false;
+let schematicClusters = [];
+let schematicExpandedClusters = new Set();
+let schematicTransitionProgress = 0;
+let schematicTransitioning = false;
+const SCHEMATIC_FONT_SIZE = 14;
+const SCHEMATIC_NODE_WIDTH = 120;
+const SCHEMATIC_NODE_HEIGHT = 36;
+const SCHEMATIC_CLUSTER_THRESHOLD = 5;
+
+// ── Grid Unfolding System for 2D Mode ─────────────────────
+let gridTweenActive = false;
+let gridTweenProgress = 0;
+let gridTweenDuration = 800; // ms
+let gridTweenStartTime = 0;
+let gridTargetPositions = new Map(); // mesh.id -> target position
+
+// Schematic pan/zoom state
+let schematicPan = { x: 0, y: 0 };
+let schematicZoom = 1.0;
+let schematicIsDragging = false;
+let schematicDragStart = { x: 0, y: 0 };
+let schematicPanStart = { x: 0, y: 0 };
+
+function calculateGridLayoutForIsland(islandKey) {
+  const islandGroup = islandGroups[islandKey];
+  if (!islandGroup) return [];
+  
+  // Get all meshes in this island
+  const islandMeshes = [];
+  islandGroup.traverse((obj) => {
+    if (obj.isMesh && obj.userData && obj.userData.node) {
+      islandMeshes.push(obj);
+    }
+  });
+  
+  if (islandMeshes.length === 0) return [];
+  
+  // Sort nodes by name for consistent layout
+  islandMeshes.sort((a, b) => {
+    const nameA = a.userData.node?.name || '';
+    const nameB = b.userData.node?.name || '';
+    return nameA.localeCompare(nameB);
+  });
+  
+  // Calculate grid dimensions
+  const nodeCount = islandMeshes.length;
+  const cols = Math.ceil(Math.sqrt(nodeCount));
+  const rows = Math.ceil(nodeCount / cols);
+  
+  const paddingX = SCHEMATIC_NODE_WIDTH * 1.5;
+  const paddingY = SCHEMATIC_NODE_HEIGHT * 1.5;
+  
+  // Get island center
+  let centerX = 0, centerZ = 0;
+  for (let i = 0; i < islandMeshes.length; i++) {
+    const orig = islandMeshes[i].userData.originalPosition;
+    if (orig) {
+      centerX += orig.x;
+      centerZ += orig.z;
+    }
+  }
+  centerX /= islandMeshes.length;
+  centerZ /= islandMeshes.length;
+  
+  // Calculate grid positions
+  const targetPositions = [];
+  for (let i = 0; i < islandMeshes.length; i++) {
+    const mesh = islandMeshes[i];
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    
+    // Center the grid around the island center
+    const offsetX = (col - (cols - 1) / 2) * paddingX;
+    const offsetZ = (row - (rows - 1) / 2) * paddingY;
+    
+    const targetX = centerX + offsetX;
+    const targetZ = centerZ + offsetZ;
+    
+    targetPositions.push({
+      mesh,
+      targetPosition: new THREE.Vector3(targetX, 0, targetZ)
+    });
+  }
+  
+  return targetPositions;
+}
+
+function startGridUnfolding() {
+  // Calculate target positions for all islands
+  gridTargetPositions.clear();
+  
+  const islandKeys = Object.keys(islandGroups);
+  for (let i = 0; i < islandKeys.length; i++) {
+    const islandKey = islandKeys[i];
+    const positions = calculateGridLayoutForIsland(islandKey);
+    for (let j = 0; j < positions.length; j++) {
+      gridTargetPositions.set(positions[j].mesh.uuid, positions[j].targetPosition);
+    }
+  }
+  
+  // Start tween
+  gridTweenActive = true;
+  gridTweenProgress = 0;
+  gridTweenStartTime = performance.now();
+}
+
+function startGridFolding() {
+  // Target positions are the original 3D positions
+  gridTargetPositions.clear();
+  
+  for (let i = 0; i < meshes.length; i++) {
+    const mesh = meshes[i];
+    const original = mesh.userData.originalPosition;
+    if (original) {
+      gridTargetPositions.set(mesh.uuid, original.clone());
+    }
+  }
+  
+  // Start tween
+  gridTweenActive = true;
+  gridTweenProgress = 0;
+  gridTweenStartTime = performance.now();
+}
+
+function updateGridTween(now) {
+  if (!gridTweenActive) return;
+  
+  gridTweenProgress = (now - gridTweenStartTime) / gridTweenDuration;
+  if (gridTweenProgress >= 1) {
+    gridTweenProgress = 1;
+    gridTweenActive = false;
+  }
+  
+  // Easing function (ease-out cubic)
+  const t = gridTweenProgress;
+  const eased = 1 - Math.pow(1 - t, 3);
+  
+  // Update mesh positions
+  for (let i = 0; i < meshes.length; i++) {
+    const mesh = meshes[i];
+    const target = gridTargetPositions.get(mesh.uuid);
+    if (!target) continue;
+    
+    const original = mesh.userData.originalPosition;
+    if (!original) continue;
+    
+    // Interpolate between original and target
+    const isUnfolding = is2DMode;
+    const start = isUnfolding ? original : gridTargetPositions.get(mesh.uuid);
+    const end = isUnfolding ? target : original;
+    
+    if (start && end) {
+      mesh.position.lerpVectors(start, end, eased);
+    }
+  }
+  
+  // Update edge geometries to follow nodes
+  for (let i = 0; i < edgeObjs.length; i++) {
+    const edge = edgeObjs[i];
+    const src = nodeMap[edge.src];
+    const tgt = nodeMap[edge.tgt];
+    const srcMesh = nodeMeshMap[edge.src];
+    const tgtMesh = nodeMeshMap[edge.tgt];
+    
+    if (srcMesh && tgtMesh && src && tgt) {
+      // Update curve points if curve exists
+      if (edge.curve && edge.curve.points) {
+        const start = srcMesh.position.clone();
+        const end = tgtMesh.position.clone();
+        const mid = new THREE.Vector3().lerpVectors(start, end, 0.5);
+        mid.y += 50; // Arc height
+        
+        // Update curve points array
+        edge.curve.points[0].copy(start);
+        edge.curve.points[1].copy(mid);
+        edge.curve.points[2].copy(end);
+      }
+      
+      // Update line geometry
+      if (edge.line && edge.line.geometry) {
+        if (edge.curve) {
+          const points = edge.curve.getPoints(32);
+          edge.line.geometry.setFromPoints(points);
+        }
+      }
+    }
+  }
+}
+
+function initSchematicOverlay() {
+  if (typeof document === 'undefined') return;
+  
+  // Create canvas overlay for 2D schematic mode
+  schematicOverlay = document.createElement('div');
+  schematicOverlay.id = 'schematic-overlay';
+  schematicOverlay.style.cssText = `
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 10;
+    background: linear-gradient(135deg, #0a0f16 0%, #0f141a 100%);
+  `;
+  
+  schematicCanvas = document.createElement('canvas');
+  schematicCanvas.style.cssText = `
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+  `;
+  
+  schematicOverlay.appendChild(schematicCanvas);
+  
+  // Add to renderer's container AFTER the renderer's canvas to ensure 3D controls work
+  const rendererContainer = renderer?.domElement?.parentElement;
+  if (rendererContainer) {
+    // Ensure renderer canvas has pointer-events auto
+    renderer.domElement.style.pointerEvents = 'auto';
+    rendererContainer.appendChild(schematicOverlay);
+  }
+  
+  schematicCtx = schematicCanvas.getContext('2d');
+  
+  // Handle canvas resize
+  window.addEventListener('resize', resizeSchematicCanvas);
+  resizeSchematicCanvas();
+  
+  // Handle click events on canvas (only in 2D mode)
+  schematicCanvas.addEventListener('click', handleSchematicClick);
+  schematicCanvas.addEventListener('mousemove', handleSchematicHover);
+  
+  // Pan controls (only in 2D mode)
+  schematicCanvas.addEventListener('mousedown', (e) => {
+    if (!schematicVisible) return;
+    if (e.button === 0) { // Left click
+      schematicIsDragging = true;
+      schematicDragStart = { x: e.clientX, y: e.clientY };
+      schematicPanStart = { x: schematicPan.x, y: schematicPan.y };
+      e.preventDefault();
+    }
+  });
+  
+  window.addEventListener('mousemove', (e) => {
+    if (schematicIsDragging && schematicVisible) {
+      const dx = e.clientX - schematicDragStart.x;
+      const dy = e.clientY - schematicDragStart.y;
+      schematicPan.x = schematicPanStart.x + dx;
+      schematicPan.y = schematicPanStart.y + dy;
+      renderSchematic();
+    }
+  });
+  
+  window.addEventListener('mouseup', () => {
+    schematicIsDragging = false;
+  });
+  
+  // Zoom controls (only in 2D mode)
+  schematicCanvas.addEventListener('wheel', (e) => {
+    if (!schematicVisible) return;
+    e.preventDefault();
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    schematicZoom = Math.max(0.1, Math.min(5.0, schematicZoom * zoomFactor));
+    renderSchematic();
+  }, { passive: false });
+}
+
+function resizeSchematicCanvas() {
+  if (!schematicCanvas || !schematicOverlay) return;
+  const rect = schematicOverlay.getBoundingClientRect();
+  schematicCanvas.width = rect.width * window.devicePixelRatio;
+  schematicCanvas.height = rect.height * window.devicePixelRatio;
+  schematicCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  if (schematicVisible) renderSchematic();
+}
+
+function computeSchematicClusters() {
+  if (!nodeMap || Object.keys(nodeMap).length === 0) return;
+  
+  const nodes = Object.values(nodeMap);
+  const clusterMap = {};
+  
+  // Cluster by group/package (island)
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const groupKey = node.group || node.package || 'default';
+    
+    if (!clusterMap[groupKey]) {
+      clusterMap[groupKey] = {
+        id: groupKey,
+        nodes: [],
+        center: new THREE.Vector3(),
+        bounds: { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+      };
+    }
+    
+    clusterMap[groupKey].nodes.push(node);
+    
+    // Update bounds using X/Z coordinates (project to 2D)
+    const x = node.x || 0;
+    const z = node.z || 0;
+    clusterMap[groupKey].bounds.minX = Math.min(clusterMap[groupKey].bounds.minX, x);
+    clusterMap[groupKey].bounds.maxX = Math.max(clusterMap[groupKey].bounds.maxX, x);
+    clusterMap[groupKey].bounds.minY = Math.min(clusterMap[groupKey].bounds.minY, z);
+    clusterMap[groupKey].bounds.maxY = Math.max(clusterMap[groupKey].bounds.maxY, z);
+  }
+  
+  // Calculate cluster centers
+  const clusters = Object.values(clusterMap);
+  for (let i = 0; i < clusters.length; i++) {
+    const cluster = clusters[i];
+    cluster.center.x = (cluster.bounds.minX + cluster.bounds.maxX) / 2;
+    cluster.center.y = (cluster.bounds.minY + cluster.bounds.maxY) / 2;
+    cluster.width = cluster.bounds.maxX - cluster.bounds.minX;
+    cluster.height = cluster.bounds.maxY - cluster.bounds.minY;
+  }
+  
+  schematicClusters = clusters;
+}
+
+function worldToSchematicCoords(wx, wz, bounds, canvasWidth, canvasHeight) {
+  // Project 3D world coordinates to 2D schematic coordinates
+  const padding = 100;
+  const scaleX = (canvasWidth - padding * 2) / bounds.width;
+  const scaleY = (canvasHeight - padding * 2) / bounds.height;
+  const scale = Math.min(scaleX, scaleY, 1.0) * schematicZoom;
+  
+  const cx = canvasWidth / 2;
+  const cy = canvasHeight / 2;
+  
+  const sx = cx + (wx - bounds.centerX) * scale + schematicPan.x;
+  const sy = cy + (wz - bounds.centerY) * scale + schematicPan.y;
+  
+  return { x: sx, y: sy, scale };
+}
+
+function renderSchematic() {
+  if (!schematicCtx || !schematicCanvas) return;
+  
+  const canvas = schematicCanvas;
+  const ctx = schematicCtx;
+  const width = canvas.width / window.devicePixelRatio;
+  const height = canvas.height / window.devicePixelRatio;
+  
+  // Clear canvas
+  ctx.clearRect(0, 0, width, height);
+  
+  // Calculate bounds for projection
+  if (schematicClusters.length === 0) return;
+  
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < schematicClusters.length; i++) {
+    const cluster = schematicClusters[i];
+    minX = Math.min(minX, cluster.bounds.minX);
+    maxX = Math.max(maxX, cluster.bounds.maxX);
+    minY = Math.min(minY, cluster.bounds.minY);
+    maxY = Math.max(maxY, cluster.bounds.maxY);
+  }
+  
+  const bounds = {
+    minX, maxX, minY, maxY,
+    width: maxX - minX || 1,
+    height: maxY - minY || 1,
+    centerX: (minX + maxX) / 2,
+    centerY: (minY + maxY) / 2
+  };
+  
+  // Draw connections between clusters (orthogonal lines)
+  ctx.strokeStyle = 'rgba(100, 150, 200, 0.4)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  
+  const clusterCenters = schematicClusters.map(c => worldToSchematicCoords(c.center.x, c.center.y, bounds, width, height));
+  
+  for (let i = 0; i < schematicClusters.length; i++) {
+    const cluster = schematicClusters[i];
+    const clusterPos = clusterCenters[i];
+    
+    // Draw lines to connected clusters
+    for (let j = 0; j < cluster.nodes.length; j++) {
+      const node = cluster.nodes[j];
+      const ups = Array.isArray(node.upstream) ? node.upstream : [];
+      const downs = Array.isArray(node.downstream) ? node.downstream : [];
+      
+      for (let k = 0; k < ups.length; k++) {
+        const targetNode = nodeMap[ups[k]];
+        if (targetNode) {
+          const targetCluster = schematicClusters.find(c => c.nodes.includes(targetNode));
+          if (targetCluster && targetCluster !== cluster) {
+            const targetIdx = schematicClusters.indexOf(targetCluster);
+            const targetPos = clusterCenters[targetIdx];
+            
+            // Draw orthogonal line
+            ctx.moveTo(clusterPos.x, clusterPos.y);
+            const midX = (clusterPos.x + targetPos.x) / 2;
+            ctx.lineTo(midX, clusterPos.y);
+            ctx.lineTo(midX, targetPos.y);
+            ctx.lineTo(targetPos.x, targetPos.y);
+          }
+        }
+      }
+    }
+  }
+  ctx.stroke();
+  
+  // Draw clusters
+  for (let i = 0; i < schematicClusters.length; i++) {
+    const cluster = schematicClusters[i];
+    const isExpanded = schematicExpandedClusters.has(cluster.id);
+    const pos = clusterCenters[i];
+    
+    if (!isExpanded && cluster.nodes.length >= SCHEMATIC_CLUSTER_THRESHOLD) {
+      // Draw collapsed cluster as parent label
+      drawClusterLabel(ctx, pos, cluster);
+    } else {
+      // Draw individual nodes
+      for (let j = 0; j < cluster.nodes.length; j++) {
+        const node = cluster.nodes[j];
+        const nodePos = worldToSchematicCoords(node.x, node.z, bounds, width, height);
+        drawNodeLabel(ctx, nodePos, node);
+      }
+    }
+  }
+}
+
+function drawClusterLabel(ctx, pos, cluster) {
+  const width = SCHEMATIC_NODE_WIDTH * 1.5;
+  const height = SCHEMATIC_NODE_HEIGHT * 1.5;
+  const x = pos.x - width / 2;
+  const y = pos.y - height / 2;
+  
+  // Draw cluster background
+  ctx.fillStyle = 'rgba(15, 25, 40, 0.95)';
+  ctx.strokeStyle = '#4a90d9';
+  ctx.lineWidth = 2;
+  
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, 8);
+  ctx.fill();
+  ctx.stroke();
+  
+  // Draw cluster label
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${SCHEMATIC_FONT_SIZE}px 'Segoe UI', sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  
+  const label = `${cluster.id} (${cluster.nodes.length})`;
+  ctx.fillText(label, pos.x, pos.y);
+  
+  // Store label bounds for click detection
+  cluster.labelBounds = { x, y, width, height };
+}
+
+function drawNodeLabel(ctx, pos, node) {
+  const width = SCHEMATIC_NODE_WIDTH;
+  const height = SCHEMATIC_NODE_HEIGHT;
+  const x = pos.x - width / 2;
+  const y = pos.y - height / 2;
+  
+  // Draw node background
+  const layerColor = getLayerDiagramColor(node.layer);
+  ctx.fillStyle = 'rgba(10, 20, 35, 0.95)';
+  ctx.strokeStyle = layerColor;
+  ctx.lineWidth = 2;
+  
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, 6);
+  ctx.fill();
+  ctx.stroke();
+  
+  // Draw node label
+  ctx.fillStyle = '#f0f8ff';
+  ctx.font = `${SCHEMATIC_FONT_SIZE}px 'Segoe UI', sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  
+  const label = String(node.name || 'NODE').slice(0, 15);
+  ctx.fillText(label, pos.x, pos.y);
+  
+  // Store label bounds for click detection
+  node.schematicBounds = { x, y, width, height };
+}
+
+function handleSchematicClick(event) {
+  const rect = schematicCanvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  
+  // Check if clicked on a cluster
+  for (let i = 0; i < schematicClusters.length; i++) {
+    const cluster = schematicClusters[i];
+    if (cluster.labelBounds) {
+      const b = cluster.labelBounds;
+      if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+        // Toggle cluster expansion
+        if (schematicExpandedClusters.has(cluster.id)) {
+          schematicExpandedClusters.delete(cluster.id);
+        } else {
+          schematicExpandedClusters.add(cluster.id);
+        }
+        renderSchematic();
+        return;
+      }
+    }
+  }
+  
+  // Check if clicked on a node
+  const nodes = Object.values(nodeMap);
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (node.schematicBounds) {
+      const b = node.schematicBounds;
+      if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+        // Select the node - same behavior as 3D
+        applySelection(node);
+        return;
+      }
+    }
+  }
+}
+
+function handleSchematicHover(event) {
+  const rect = schematicCanvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  
+  let cursor = 'default';
+  
+  // Check if hovering over clickable element
+  for (let i = 0; i < schematicClusters.length; i++) {
+    const cluster = schematicClusters[i];
+    if (cluster.labelBounds) {
+      const b = cluster.labelBounds;
+      if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+        cursor = 'pointer';
+        break;
+      }
+    }
+  }
+  
+  if (cursor === 'default') {
+    const nodes = Object.values(nodeMap);
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (node.schematicBounds) {
+        const b = node.schematicBounds;
+        if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+          cursor = 'pointer';
+          break;
+        }
+      }
+    }
+  }
+  
+  schematicCanvas.style.cursor = cursor;
+}
+
+const diagramNodeTargets = [];
+
+// ── Dynamic Resolution Scaling (DRS) ─────────────────
+// Monitors FPS and progressively degrades quality when sustained drops happen.
+const DRS = {
+  enabled: true,
+  // Rolling window of inter-frame deltas (ms). Last 60 frames.
+  deltas: new Float32Array(60),
+  deltaIdx: 0,
+  deltaFilled: 0,
+  lastFrameTime: 0,
+  // Trigger: avg FPS below this for >= sustainedMs triggers a downgrade step.
+  fpsThreshold: 45,
+  sustainedMs: 2000,
+  belowSinceMs: 0,
+  // Step state. Step 0 = native. Each step degrades further.
+  step: 0,
+  maxSteps: 3,                       // safety floor: don't keep degrading forever
+  cooldownMs: 4000,                  // wait this long after a step before considering another
+  lastStepAt: 0,
+  // Baselines captured on first frame (so we can scale relative to user's setup)
+  baseRenderDistance: 6000,
+  baseCameraFar: 0,                  // captured lazily
+  basePixelRatio: 1,                 // captured lazily
+  // Per-step multipliers applied to baselines.
+  // POLICY: prioritize sharpness — pixelRatio is NEVER reduced.
+  // Instead, be aggressive with render distance: hide far islands first.
+  // Step 3 effectively shows only the island the camera is in.
+  pixelRatioByStep:    [1.0, 1.0, 1.0, 1.0],
+  renderDistanceByStep:[1.0, 0.7, 0.4, 0.2],
+};
 
 
 // ── Constants ──────────────────────────────────────────
@@ -246,6 +966,12 @@ export let critSet = new Set();
 
 // Camera tween state
 let camTween = null;
+let cinematicFlightActive = false;
+let cinematicPrevDRSEnabled = true;
+export const GLOBAL_VIEW_FLIGHT_MS = 2000;
+const GLOBAL_VIEW_FIT_MULTIPLIER = 1.35;
+const GLOBAL_VIEW_ALTITUDE_BIAS = 0.75;
+const GLOBAL_VIEW_ALTITUDE_OFFSET = 180;
 
 // Build animation state
 const VOXEL_PROG = 400;
@@ -323,6 +1049,99 @@ export function findNodeInHierarchy(obj) {
   return null;
 }
 
+function getDiagramNodeX(n) {
+  return Number.isFinite(Number(n?.diagramX)) ? Number(n.diagramX) : Number(n?.x || 0);
+}
+
+function getDiagramNodeZ(n) {
+  return Number.isFinite(Number(n?.diagramZ)) ? Number(n.diagramZ) : Number(n?.z || 0);
+}
+
+function computeDiagramLayout(nodes) {
+  if (!Array.isArray(nodes) || !nodes.length) return;
+
+  const layerGapX = 1.35;
+  const slotGapZ = 96;
+  const smoothPasses = 6;
+
+  const layerBuckets = {};
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const layer = n.layer || 'default';
+    if (!layerBuckets[layer]) layerBuckets[layer] = [];
+    layerBuckets[layer].push(n);
+  }
+
+  const layers = Object.keys(layerBuckets).sort((a, b) => {
+    const ax = LAYER_X[a] ?? LAYER_X.default;
+    const bx = LAYER_X[b] ?? LAYER_X.default;
+    return ax - bx;
+  });
+
+  const rankMap = {};
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    const bucket = layerBuckets[layer];
+    bucket.sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+    const center = (bucket.length - 1) * 0.5;
+    for (let j = 0; j < bucket.length; j++) {
+      const n = bucket[j];
+      rankMap[n.id] = (j - center) * slotGapZ;
+    }
+  }
+
+  const getNeighbors = (n) => {
+    const res = [];
+    const ups = Array.isArray(n.upstream) ? n.upstream : [];
+    const downs = Array.isArray(n.downstream) ? n.downstream : [];
+    for (let i = 0; i < ups.length; i++) res.push(ups[i]);
+    for (let i = 0; i < downs.length; i++) res.push(downs[i]);
+    return res;
+  };
+
+  for (let pass = 0; pass < smoothPasses; pass++) {
+    for (let li = 0; li < layers.length; li++) {
+      const bucket = layerBuckets[layers[li]];
+      for (let bi = 0; bi < bucket.length; bi++) {
+        const n = bucket[bi];
+        const neighbors = getNeighbors(n);
+        if (!neighbors.length) continue;
+
+        let sum = 0;
+        let count = 0;
+        for (let ni = 0; ni < neighbors.length; ni++) {
+          const rk = rankMap[neighbors[ni]];
+          if (Number.isFinite(rk)) {
+            sum += rk;
+            count++;
+          }
+        }
+        if (!count) continue;
+
+        const avg = sum / count;
+        rankMap[n.id] = (rankMap[n.id] * 0.58) + (avg * 0.42);
+      }
+    }
+
+    for (let li = 0; li < layers.length; li++) {
+      const bucket = layerBuckets[layers[li]];
+      bucket.sort((a, b) => (rankMap[a.id] - rankMap[b.id]));
+      const center = (bucket.length - 1) * 0.5;
+      for (let bi = 0; bi < bucket.length; bi++) {
+        const n = bucket[bi];
+        rankMap[n.id] = (bi - center) * slotGapZ;
+      }
+    }
+  }
+
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const baseX = (LAYER_X[n.layer || 'default'] ?? LAYER_X.default) * layerGapX;
+    n.diagramX = baseX;
+    n.diagramZ = rankMap[n.id] ?? 0;
+  }
+}
+
 function makeFaceTex(label, hex, layer) {
   const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
   const ctx = c.getContext('2d');
@@ -357,6 +1176,84 @@ export function makeTimeSprite(text, isBottleneck) {
   sp.scale.set(30 * scaleMult, 12 * scaleMult, 1);
   sp.raycast = () => {};
   return sp;
+}
+
+function getLayerDiagramColor(layer) {
+  const l = String(layer || '').toLowerCase();
+  if (l === 'source') return '#7ad8a1';
+  if (l === 'staging') return '#39ff14';
+  if (l === 'intermediate') return '#66c2ff';
+  if (l === 'mart') return '#2f9bff';
+  if (l === 'consumption') return '#ffd166';
+  return '#8fb3c8';
+}
+
+function makeDiagramNodeSprite(node) {
+  const text = String(node?.name || 'NODE').slice(0, 42);
+  const fill = getLayerDiagramColor(node?.layer);
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 192;
+  const ctx = c.getContext('2d');
+
+  ctx.clearRect(0, 0, c.width, c.height);
+  const x = 14;
+  const y = 16;
+  const w = c.width - 28;
+  const h = c.height - 32;
+  const r = 24;
+
+  // Schematic technical background
+  ctx.fillStyle = 'rgba(8, 12, 18, 0.92)';
+  ctx.strokeStyle = fill;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Technical grid pattern
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  for (let i = x + 20; i < x + w; i += 20) {
+    ctx.beginPath();
+    ctx.moveTo(i, y);
+    ctx.lineTo(i, y + h);
+    ctx.stroke();
+  }
+
+  ctx.font = "bold 44px 'Courier New', monospace";
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#f0f8ff';
+  ctx.shadowColor = 'rgba(0,0,0,0.8)';
+  ctx.shadowBlur = 8;
+  ctx.fillText(text, c.width / 2, c.height / 2);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  // Larger, more readable size for schematic mode
+  const widthWorld = 96;
+  const heightWorld = 36;
+  sprite.scale.set(widthWorld, heightWorld, 1);
+  sprite.name = 'diagramNode';
+  sprite.visible = false;
+  sprite.renderOrder = 40;
+  sprite.userData.node = node;
+  sprite.userData.isDiagramSprite = true; // Flag for clustering logic
+  return sprite;
 }
 
 function makeSprite(text, hex) {
@@ -445,12 +1342,16 @@ export function buildBuilding(n) {
   const mesh = new THREE.Mesh(geo, [sideM, sideM, topM, botM, faceM, sideM]);
   if (n.is_dead_end) mesh.renderOrder = 5;
   mesh.position.set(n.x, 0, n.z);
-  mesh.castShadow = true;
+  // Store original 3D position for grid unfolding
+  mesh.userData.originalPosition = new THREE.Vector3(n.x, 0, n.z);
+  // castShadow disabled: 450 dynamic shadow casters were a major GPU cost.
+  mesh.castShadow = false;
 
   const voxel = makeVoxelMesh(col);
   voxel.position.set(n.x, 0, n.z);
   voxel.userData.dist = Math.sqrt(n.x * n.x + n.z * n.z);
-  scene.add(voxel); voxels.push(voxel);
+  const _islandParentGroup = _islandParent(n.group);
+  _islandParentGroup.add(voxel); voxels.push(voxel);
 
   mesh.visible = false;
   mesh.userData = { 
@@ -464,18 +1365,15 @@ export function buildBuilding(n) {
   // Neon edges
   mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color:col,transparent:true,opacity:0.85})));
 
-  // Halo point light
-  const halo = new THREE.PointLight(0xff4400, 3.5, 60);
-  halo.position.set(0, h/2, 0); halo.name = 'halo'; halo.visible = false;
-  mesh.add(halo);
+  // PERFORMANCE: PointLights removed (halo, glow, pulseLight).
+  // For 450 nodes that was ~1350 dynamic lights → WebGL shader uniform overflow → crash.
+  // The visual glow comes from emissive material instead, modulated dynamically below.
+  // Bottleneck/halo effect is handled via emissive flash in the render loop (see perfMode branch).
 
   // Thermal Degradation VFX
   if (!vfxManager) vfxManager = new VFXManager(scene);
   const thermalGroup = vfxManager.createThermalGroup(h);
   mesh.add(thermalGroup);
-
-  const glow = new THREE.PointLight(col, 1.5, 42);
-  glow.position.set(0, 2, 0); mesh.add(glow);
 
   const sp = makeSprite(n.name, col);
   sp.position.set(0, h + 8, 0); sp.name = 'label'; mesh.add(sp); mesh.userData.label = sp;
@@ -484,51 +1382,26 @@ export function buildBuilding(n) {
   timeSp.position.set(0, h + 25, 0); timeSp.visible = false; timeSp.name = 'timeLabel';
   mesh.add(timeSp); mesh.userData.timeLabel = timeSp;
 
-  // ── Data Volume Label (CSS2DObject) ────────────────────
-  const volumeDiv = document.createElement('div');
-  volumeDiv.className = 'data-volume-label';
-  volumeDiv.textContent = formatSwellLabel(n, null);
-  const initialStyle = getSeverityStyle(severity.level);
-  volumeDiv.style.cssText = `
-    background: rgba(0,0,0,0.7);
-    color: ${initialStyle.color};
-    padding: 6px 12px;
-    border-radius: 6px;
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    font-weight: bold;
-    border: 1px solid ${initialStyle.borderColor};
-    box-shadow: ${initialStyle.boxShadow};
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.3s;
-    white-space: nowrap;
-    text-shadow: ${initialStyle.textShadow};
-  `;
-  
-  const CSS2DObject = window.CSS2DObject || (THREE.CSS2DObject);
-  if (CSS2DObject) {
-    const volumeLabel = new CSS2DObject(volumeDiv);
-    volumeLabel.position.set(0, h + 24, 0);
-    volumeLabel.name = 'volumeLabel';
-    mesh.add(volumeLabel);
-    mesh.userData.volumeLabel = volumeLabel;
-    mesh.userData.volumeDiv = volumeDiv;
-    mesh.userData.volumeLabelOffset = 28;
-    mesh.userData.lastSwellMetric = State.dataSwellMetric || 'execution_time';
-    mesh.userData.lastSwellSeverity = severity.level;
-  }
+  // ── Data Volume Label (lazy) ──────────────────────────
+  // CSS2DObject + DOM div per node was creating 450+ DOM elements upfront.
+  // We now create them lazily in the render loop only when Data Volume Mode is active.
+  mesh.userData.volumeLabelOffset = 28;
+  mesh.userData.lastSwellMetric = State.dataSwellMetric || 'execution_time';
+  mesh.userData.lastSwellSeverity = severity.level;
 
-  // ── Critical Volume Pulse Effect (dynamic severity) ───
-  const pulseLight = new THREE.PointLight(0xff4400, 2.0, 40);
-  pulseLight.position.set(0, 2, 0);
-  pulseLight.name = 'pulseLight';
-  pulseLight.visible = false;
-  mesh.add(pulseLight);
-  mesh.userData.pulseLight = pulseLight;
+  // PointLight pulse for critical volume removed (perf). Pulse is now done via
+  // emissive intensity modulation in the render loop.
 
   mesh.scale.y = 0;
-  scene.add(mesh); meshes.push(mesh); nodeMeshMap[n.id] = mesh;
+  _islandParentGroup.add(mesh); meshes.push(mesh); nodeMeshMap[n.id] = mesh;
+
+  const diagramSprite = makeDiagramNodeSprite(n);
+  diagramSprite.position.set(getDiagramNodeX(n), 2.2, getDiagramNodeZ(n));
+  _islandParentGroup.add(diagramSprite);
+  mesh.userData.diagramSprite = diagramSprite;
+  diagramNodeTargets.push(diagramSprite);
+
+  _cullDirty = true;
   return mesh;
 }
 
@@ -564,7 +1437,59 @@ export function buildEdge(link) {
   const pts = curve.getPoints(isInterIsland ? 80 : 42);
   const geo = new THREE.BufferGeometry().setFromPoints(pts);
   const mat = new THREE.LineBasicMaterial({color, transparent:true, opacity});
-  const line = new THREE.Line(geo, mat); scene.add(line);
+  const line = new THREE.Line(geo, mat);
+  
+  // Inter-island arcs go to globalArcsGroup (never culled with islands).
+  // Intra-island arcs go to the island's group so they hide together.
+  const arcParent = isInterIsland
+    ? (globalArcsGroup || (globalArcsGroup = (() => { const g = new THREE.Group(); g.name = 'globalArcs'; scene.add(g); return g; })()))
+    : _islandParent(src.group);
+  arcParent.add(line);
+
+  // Direction marker (visible in top-down 2D mode)
+  const arrowOrigin = curve.getPoint(0.58);
+  const arrowDir = B.clone().sub(A);
+  arrowDir.y = 0;
+  if (arrowDir.lengthSq() < 1e-6) arrowDir.set(1, 0, 0);
+  arrowDir.normalize();
+  const arrowLen = isInterIsland ? 34 : 24;
+  const arrow = new THREE.ArrowHelper(arrowDir, arrowOrigin, arrowLen, color, arrowLen * 0.42, arrowLen * 0.24);
+  arrow.line.material.transparent = true;
+  arrow.line.material.opacity = opacity;
+  arrow.cone.material.transparent = true;
+  arrow.cone.material.opacity = opacity;
+  arrow.renderOrder = 12;
+  arcParent.add(arrow);
+
+  const diagramA = new THREE.Vector3(getDiagramNodeX(src), 2.0, getDiagramNodeZ(src));
+  const diagramB = new THREE.Vector3(getDiagramNodeX(tgt), 2.0, getDiagramNodeZ(tgt));
+  const diagramLineMat = new THREE.LineBasicMaterial({
+    color: isInterIsland ? 0xa4caff : 0x7b9ab6,
+    transparent: true,
+    opacity: isInterIsland ? 0.9 : 0.72,
+    depthTest: false,
+  });
+  const diagramLineGeo = new THREE.BufferGeometry().setFromPoints([diagramA, diagramB]);
+  const diagramLine = new THREE.Line(diagramLineGeo, diagramLineMat);
+  diagramLine.visible = false;
+  diagramLine.renderOrder = 33;
+  arcParent.add(diagramLine);
+
+  const diagramDir = diagramB.clone().sub(diagramA);
+  diagramDir.y = 0;
+  if (diagramDir.lengthSq() < 1e-6) diagramDir.set(1, 0, 0);
+  diagramDir.normalize();
+  const headLen = isInterIsland ? 12 : 9;
+  const headPos = diagramB.clone().addScaledVector(diagramDir, -headLen * 0.9);
+  const diagramArrow = new THREE.ArrowHelper(diagramDir, headPos, headLen, 0xd8ebff, headLen * 0.55, headLen * 0.42);
+  diagramArrow.line.material.transparent = true;
+  diagramArrow.line.material.opacity = 0.95;
+  diagramArrow.line.visible = false;
+  diagramArrow.cone.material.transparent = true;
+  diagramArrow.cone.material.opacity = 0.95;
+  diagramArrow.visible = false;
+  diagramArrow.renderOrder = 34;
+  arcParent.add(diagramArrow);
   
   const N = isInterIsland ? 12 : 5;
   const particles = [];
@@ -576,9 +1501,16 @@ export function buildEdge(link) {
     const isAccelerated = tgtNode && tgtNode.layer === 'mart';
     const baseSpeed = isInterIsland ? 0.002 : 0.005;
     p.userData = { curve, t: i/N, speed: isAccelerated ? baseSpeed * 1.8 : baseSpeed };
-    scene.add(p); particles.push(p);
+    arcParent.add(p); particles.push(p);
   }
-  edgeObjs.push({ line, particles, curve, src: srcId, tgt: tgtId, isInterIsland });
+  edgeObjs.push({
+    line, particles, curve, src: srcId, tgt: tgtId, isInterIsland, parent: arcParent, arrow,
+    diagramLine, diagramArrow,
+  });
+}
+
+export function zoomToFitAll(durationMs = GLOBAL_VIEW_FLIGHT_MS) {
+  triggerGlobalView(durationMs);
 }
 
 // ── SLA Fire Logic ─────────────────────────────────────
@@ -590,12 +1522,16 @@ export function getNodeSLA(node) {
 
 export function updateFires() {
   let count = 0;
+  Object.keys(islandFireState).forEach(k => { islandFireState[k] = false; });
   meshes.forEach(m => {
     const n = m.userData.node; if (!n) return;
     const threshold = getNodeSLA(n);
     const wasBottleneck = n.is_bottleneck;
     n.is_bottleneck = (n.execution_time || 0) >= threshold;
-    if (n.is_bottleneck) count++;
+    if (n.is_bottleneck) {
+      count++;
+      islandFireState[n.group || 'default'] = true;
+    }
 
     const fire = m.children.find(c => c.name === 'fire');
     const halo = m.children.find(c => c.name === 'halo');
@@ -651,6 +1587,15 @@ export function applySelection(node) {
     const id = n.id;
     const inSet = focusNode ? critSet.has(id) : true;
     const isBlastSource = blastMode && blastSourceId === id;
+
+    const diagramSprite = m.userData.diagramSprite;
+    if (diagramSprite && diagramSprite.material) {
+      const spriteOpacity = focusNode ? (inSet ? 1.0 : 0.22) : 1.0;
+      diagramSprite.material.opacity = spriteOpacity;
+      const targetScale = (focusNode && inSet) ? 1.08 : 1.0;
+      diagramSprite.scale.set(72 * targetScale, 27 * targetScale, 1);
+    }
+
     m.children.forEach(child => {
       // GHOST MODE: Subtle outlines and labels for reference
       if (child.isLineSegments) child.material.opacity = inSet ? (isBlastSource ? 1.0 : 0.92) : (blastMode ? 0.03 : 0.05);
@@ -671,6 +1616,31 @@ export function applySelection(node) {
     e.line.material.opacity   = focusNode ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : (blastMode ? 0.0 : 0.0)) : (e.isInterIsland ? 0.8 : 0.45);
     e.line.material.color.copy(focusNode ? (inPath ? (blastMode ? blastColor : highlightColor) : ghostColor) : defaultColor);
     e.line.renderOrder = inPath ? 10 : 0;
+    if (e.arrow) {
+      const arrowOpacity = e.line.material.opacity;
+      e.arrow.line.material.opacity = arrowOpacity;
+      e.arrow.cone.material.opacity = arrowOpacity;
+      e.arrow.line.material.color.copy(e.line.material.color);
+      e.arrow.cone.material.color.copy(e.line.material.color);
+      e.arrow.visible = arrowOpacity > 0.01;
+    }
+
+    if (e.diagramLine) {
+      const idleOpacity = e.isInterIsland ? 0.9 : 0.72;
+      const ghostOpacity = blastMode ? 0.08 : 0.12;
+      e.diagramLine.material.opacity = focusNode ? (inPath ? 0.98 : ghostOpacity) : idleOpacity;
+      const c = focusNode
+        ? (inPath ? (blastMode ? blastColor : highlightColor) : ghostColor)
+        : new THREE.Color(e.isInterIsland ? 0xa4caff : 0x7b9ab6);
+      e.diagramLine.material.color.copy(c);
+    }
+    if (e.diagramArrow) {
+      const arrowOpacity = Number(e.diagramLine?.material?.opacity || 0.9);
+      const arrowColor = e.diagramLine?.material?.color || new THREE.Color(0xd8ebff);
+      e.diagramArrow.cone.material.opacity = arrowOpacity;
+      e.diagramArrow.cone.material.color.copy(arrowColor);
+      e.diagramArrow.visible = arrowOpacity > 0.03;
+    }
     
     e.particles.forEach(p => {
       p.material.opacity = focusNode ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : 0.0) : (e.isInterIsland ? 0.8 : 0.25);
@@ -703,13 +1673,276 @@ export function applyBlastRadius(sourceId, impactedIds) {
 }
 
 // ── Camera Tween ───────────────────────────────────────
-export function tweenCamera(to, toTarget, dur=1200) {
+function easeInOutCubic(x) {
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+export function tweenCamera(to, toTarget, dur=1200, options = null) {
+  const cfg = options || {};
   camTween = {
     sp: camera.position.clone(), st: controls.target.clone(),
     ep: new THREE.Vector3(to.x, to.y, to.z),
     et: new THREE.Vector3(toTarget.x, toTarget.y, toTarget.z),
-    start: performance.now(), dur
+    start: performance.now(), dur,
+    easing: typeof cfg.easing === 'function' ? cfg.easing : easeInOutCubic,
+    onUpdate: typeof cfg.onUpdate === 'function' ? cfg.onUpdate : null,
+    onComplete: typeof cfg.onComplete === 'function' ? cfg.onComplete : null,
   };
+}
+
+export function fitCameraToAll(durationMs = 1500) {
+  if (!camera || !controls || is2DMode) return;
+
+  const keys = Object.keys(islandGroups);
+  if (!keys.length) return;
+
+  for (let i = 0; i < keys.length; i++) {
+    const g = islandGroups[keys[i]];
+    if (g) g.visible = true;
+  }
+
+  const worldBox = new THREE.Box3().setFromObject(scene);
+  if (worldBox.isEmpty()) {
+    console.warn('[CityEngine] fitCameraToAll: Box3(scene) vacío, usando fallback con islandMeta.');
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = 0;
+    let maxY = 0;
+    let minZ = Number.POSITIVE_INFINITY;
+    let maxZ = Number.NEGATIVE_INFINITY;
+    let found = 0;
+
+    for (let i = 0; i < keys.length; i++) {
+      const meta = islandMeta[keys[i]];
+      if (!meta || !meta.center) continue;
+      const cx = Number(meta.center.x) || 0;
+      const cz = Number(meta.center.z) || 0;
+      const r = Math.max(120, Number(meta.radius) || 0);
+      minX = Math.min(minX, cx - r);
+      maxX = Math.max(maxX, cx + r);
+      minZ = Math.min(minZ, cz - r);
+      maxZ = Math.max(maxZ, cz + r);
+      maxY = Math.max(maxY, 420);
+      found++;
+    }
+
+    if (!found) {
+      console.warn('[CityEngine] fitCameraToAll: fallback sin datos en islandMeta; abortando encuadre global.');
+      return;
+    }
+    worldBox.min.set(minX, minY, minZ);
+    worldBox.max.set(maxX, maxY, maxZ);
+  }
+
+  const center = worldBox.getCenter(new THREE.Vector3());
+  const size = worldBox.getSize(new THREE.Vector3());
+  const focusCenter = new THREE.Vector3(center.x, 0, center.z);
+  const spanX = Math.max(220, size.x);
+  const spanZ = Math.max(220, size.z);
+  const footprintRadius = Math.sqrt((spanX * 0.5) * (spanX * 0.5) + (spanZ * 0.5) * (spanZ * 0.5));
+
+  if (DRS.step > 0) {
+    DRS.step = 0;
+    DRS.belowSinceMs = 0;
+    DRS.deltaFilled = 0;
+    DRS.deltaIdx = 0;
+    DRS.lastStepAt = performance.now();
+
+    if (DRS.baseRenderDistance > 0) {
+      MAX_RENDER_DISTANCE = Math.max(MAX_RENDER_DISTANCE, DRS.baseRenderDistance);
+    }
+    if (DRS.baseCameraFar > 0 && camera.far < DRS.baseCameraFar) {
+      camera.far = DRS.baseCameraFar;
+      camera.updateProjectionMatrix();
+    }
+    if (renderer?.setPixelRatio && DRS.basePixelRatio > 0) {
+      renderer.setPixelRatio(DRS.basePixelRatio);
+    }
+  }
+
+  const fov = THREE.MathUtils.degToRad(Math.max(10, Number(camera.fov) || 55));
+  const tanHalfFov = Math.tan(fov * 0.5);
+  const sinHalfFov = Math.sin(fov * 0.5);
+  const aspect = Math.max(0.2, Number(camera.aspect) || (window.innerWidth / Math.max(1, window.innerHeight)));
+  const halfW = Math.max(1, size.x * 0.5);
+  const halfH = Math.max(1, size.z * 0.5);
+  const fitByHeight = halfH / Math.max(1e-4, tanHalfFov);
+  const fitByWidth = halfW / Math.max(1e-4, tanHalfFov * aspect);
+  const fitBySphere = footprintRadius / Math.max(0.15, sinHalfFov);
+  const fitDistance = Math.max(fitByHeight, fitByWidth, fitBySphere, 420) * GLOBAL_VIEW_FIT_MULTIPLIER;
+  const worldDiag = size.length();
+
+  const requiredFar = Math.max(Number(camera.far) || 0, fitDistance + (worldDiag * 1.8) + 800);
+  if ((Number(camera.far) || 0) < requiredFar) {
+    camera.far = requiredFar;
+    camera.updateProjectionMatrix();
+  }
+
+  const requiredRenderDistance = Math.max(
+    MAX_RENDER_DISTANCE,
+    (Math.sqrt((size.x * size.x) + (size.z * size.z)) * 0.75) + 900
+  );
+  if (MAX_RENDER_DISTANCE < requiredRenderDistance) {
+    MAX_RENDER_DISTANCE = requiredRenderDistance;
+  }
+
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0.14, 0.58, 1.0);
+  dir.y = Math.max(0.62, Math.abs(dir.y));
+  dir.normalize();
+
+  const dest = focusCenter.clone().addScaledVector(dir, fitDistance);
+  dest.y = Math.max(dest.y, (footprintRadius * GLOBAL_VIEW_ALTITUDE_BIAS) + GLOBAL_VIEW_ALTITUDE_OFFSET);
+
+  const startPos = camera.position.clone();
+  const flightVec = dest.clone().sub(startPos);
+  const flightDir = flightVec.clone();
+  if (flightDir.lengthSq() < 1e-6) flightDir.set(0, 0, 1);
+  flightDir.normalize();
+  const flightSide = new THREE.Vector3(-flightDir.z, 0, flightDir.x).normalize();
+
+  const arcHeight = Math.max(64, fitDistance * 0.1);
+  const driftAmp = Math.max(10, fitDistance * 0.02);
+  const tiltAmp = Math.max(5, fitDistance * 0.012);
+  const overshootAmp = Math.max(8, fitDistance * 0.011);
+
+  if (!cinematicFlightActive) {
+    cinematicPrevDRSEnabled = DRS.enabled;
+  }
+  cinematicFlightActive = true;
+  isSystemAnimating = true;
+  DRS.enabled = false;
+  _suspendSectorCulling = true;
+  _forceFullRenderUntilMs = performance.now() + 8000;
+  for (let i = 0; i < keys.length; i++) {
+    const group = islandGroups[keys[i]];
+    if (group) group.visible = true;
+  }
+
+  const bloomBase = bloomPass ? Number(bloomPass.strength || 0) : 0;
+  const bloomBoost = Math.max(0.18, bloomBase * 0.25);
+
+  tweenCamera(dest, focusCenter, durationMs, {
+    easing: easeInOutCubic,
+    onUpdate: (progress) => {
+      const p = Math.max(0, Math.min(1, progress));
+      const arcLift = Math.sin(Math.PI * p) * arcHeight;
+      const drift = Math.sin(Math.PI * p) * driftAmp;
+      const tilt = Math.sin(Math.PI * p) * tiltAmp;
+
+      camera.position.y += arcLift;
+      camera.position.addScaledVector(flightSide, drift * 0.18);
+      controls.target.y += tilt;
+
+      if (p > 0.82) {
+        const t = (p - 0.82) / 0.18;
+        const damp = Math.exp(-4.5 * t);
+        const osc = Math.sin(t * 10.5);
+        const k = osc * damp * overshootAmp;
+        camera.position.addScaledVector(flightDir, k);
+        controls.target.addScaledVector(flightDir, k * 0.24);
+      }
+
+      if (bloomPass) {
+        const pulse = Math.sin(Math.PI * p);
+        bloomPass.strength = bloomBase + (bloomBoost * pulse);
+      }
+      
+      // Force render during animation to ensure scene is visible
+      controls.update();
+      if (composer && !is2DMode) {
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
+    },
+    onComplete: () => {
+      if (bloomPass) bloomPass.strength = bloomBase;
+      camera.position.copy(dest);
+      controls.target.copy(focusCenter);
+      controls.update();
+      
+      // Enable fast auto-rotation in global view
+      if (controls) {
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 5.0; // Very fast rotation
+        controls.update();
+      }
+      
+      _suspendSectorCulling = false;
+      DRS.enabled = cinematicPrevDRSEnabled;
+      cinematicFlightActive = false;
+      isSystemAnimating = false;
+      _lastSystemAnimEndMs = performance.now();
+      _cullDirty = true;
+      
+      // Force high quality render but keep engine awake
+      const devicePixelRatio = window.devicePixelRatio || 1;
+      if (renderer?.setPixelRatio) {
+        renderer.setPixelRatio(devicePixelRatio);
+      }
+      if (camera) camera.updateProjectionMatrix();
+      
+      // Render immediately to ensure scene is visible
+      if (composer && !is2DMode) {
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
+    },
+  });
+}
+
+export function triggerGlobalView(durationMs = GLOBAL_VIEW_FLIGHT_MS) {
+  fitCameraToAll(durationMs);
+}
+
+// ── Force High Quality Frame ─────────────────────────────
+// Called after system animations (e.g., Global View) to restore
+// maximum quality and render a clean "gold frame" before going idle.
+function forceHighQualityFrame() {
+  if (!renderer || !camera) return;
+  
+  // Disable DRS for 30 seconds after global view to prevent degradation
+  _drsDisabledUntilMs = performance.now() + 30000;
+  
+  // Reset pixelRatio to device native for crisp rendering
+  const devicePixelRatio = window.devicePixelRatio || 1;
+  if (renderer.setPixelRatio) {
+    renderer.setPixelRatio(devicePixelRatio);
+  }
+  
+  // Restore camera.far and MAX_RENDER_DISTANCE to safe high values
+  const safeFar = Math.max(MIN_GLOBAL_DISTANCE, DRS.baseCameraFar || MIN_GLOBAL_DISTANCE);
+  const safeRenderDist = Math.max(MIN_RENDER_DISTANCE, DRS.baseRenderDistance || MIN_RENDER_DISTANCE);
+  
+  camera.far = safeFar;
+  camera.updateProjectionMatrix();
+  MAX_RENDER_DISTANCE = safeRenderDist;
+  
+  // Reset DRS to baseline to prevent immediate re-degradation
+  DRS.step = 0;
+  DRS.belowSinceMs = 0;
+  DRS.deltaFilled = 0;
+  DRS.deltaIdx = 0;
+  DRS.lastStepAt = performance.now();
+  
+  // Force one high-quality render
+  if (composer && !is2DMode) {
+    composer.render();
+  } else {
+    renderer.render(scene, camera);
+  }
+  
+  // Render CSS2D labels if present
+  if (labelRenderer) {
+    labelRenderer.render(scene, camera);
+  }
+  
+  // Put engine to sleep
+  needsUpdate = false;
+  
+  console.log('[CityEngine] forceHighQualityFrame: Quality restored to baseline, DRS disabled for 30s, engine sleeping.');
 }
 
 export function flyToNode(nodeNameOrId) {
@@ -724,10 +1957,502 @@ export function flyToNode(nodeNameOrId) {
   if (!targetMesh || !controls || !camera) return;
 
   applySelection(targetNode);
-  const buildingPos = targetMesh.position.clone();
+  const buildingPos = is2DMode
+    ? new THREE.Vector3(getDiagramNodeX(targetNode), 0, getDiagramNodeZ(targetNode))
+    : targetMesh.position.clone();
+
+  if (is2DMode) {
+    controls.target.copy(buildingPos);
+    if (Visualizer.orthoCamera) {
+      Visualizer.orthoCamera.position.set(buildingPos.x, Math.max(1200, Visualizer.orthoCamera.position.y), buildingPos.z);
+      Visualizer.orthoCamera.lookAt(buildingPos.x, 0, buildingPos.z);
+      Visualizer.orthoCamera.updateProjectionMatrix();
+    }
+    controls.update();
+    return;
+  }
+
   const currentDir = camera.position.clone().sub(controls.target).normalize();
   const destPos = buildingPos.clone().add(currentDir.multiplyScalar(140));
   tweenCamera(destPos, buildingPos.clone().add(new THREE.Vector3(0, 12, 0)), 1100);
+}
+
+function flyToIslandCenter(islandKey) {
+  const key = islandKey || 'default';
+  const meta = islandMeta[key];
+  if (!meta || !camera || !controls) return;
+
+  const focus = new THREE.Vector3(meta.center.x, 12, meta.center.z);
+  const currentDir = camera.position.clone().sub(controls.target).normalize();
+  const radiusOffset = Math.max(220, (meta.radius || 250) * 0.75);
+  const dest = focus.clone().add(currentDir.multiplyScalar(radiusOffset));
+  dest.y = Math.max(110, camera.position.y);
+  tweenCamera(dest, focus, 1000);
+}
+
+function getCityCenterXZ() {
+  const keys = Object.keys(islandMeta);
+  if (!keys.length) return { x: 0, z: 0 };
+  let sx = 0;
+  let sz = 0;
+  let n = 0;
+  for (let i = 0; i < keys.length; i++) {
+    const m = islandMeta[keys[i]];
+    if (!m) continue;
+    sx += m.center.x;
+    sz += m.center.z;
+    n++;
+  }
+  if (!n) return { x: 0, z: 0 };
+  return { x: sx / n, z: sz / n };
+}
+
+function getCityFitBoundsXZ() {
+  if (is2DMode) {
+    const allNodes = Object.values(nodeMap);
+    if (!allNodes.length) return { x: 0, z: 0, radius: 700 };
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minZ = Number.POSITIVE_INFINITY;
+    let maxZ = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < allNodes.length; i++) {
+      const n = allNodes[i];
+      const x = getDiagramNodeX(n);
+      const z = getDiagramNodeZ(n);
+      minX = Math.min(minX, x - 48);
+      maxX = Math.max(maxX, x + 48);
+      minZ = Math.min(minZ, z - 42);
+      maxZ = Math.max(maxZ, z + 42);
+    }
+    const x = (minX + maxX) * 0.5;
+    const z = (minZ + maxZ) * 0.5;
+    const halfW = (maxX - minX) * 0.5;
+    const halfD = (maxZ - minZ) * 0.5;
+    const radius = Math.max(260, Math.sqrt((halfW * halfW) + (halfD * halfD)));
+    return { x, z, radius };
+  }
+
+  const keys = Object.keys(islandMeta);
+  if (!keys.length) return { x: 0, z: 0, radius: 700 };
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+
+  for (let i = 0; i < keys.length; i++) {
+    const meta = islandMeta[keys[i]];
+    if (!meta) continue;
+    const r = Math.max(80, Number(meta.radius) || 0);
+    const x = Number(meta.center?.x) || 0;
+    const z = Number(meta.center?.z) || 0;
+    minX = Math.min(minX, x - r);
+    maxX = Math.max(maxX, x + r);
+    minZ = Math.min(minZ, z - r);
+    maxZ = Math.max(maxZ, z + r);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    const center = getCityCenterXZ();
+    return { x: center.x, z: center.z, radius: 700 };
+  }
+
+  const x = (minX + maxX) * 0.5;
+  const z = (minZ + maxZ) * 0.5;
+  const halfW = (maxX - minX) * 0.5;
+  const halfD = (maxZ - minZ) * 0.5;
+  const radius = Math.max(260, Math.sqrt((halfW * halfW) + (halfD * halfD)));
+  return { x, z, radius };
+}
+
+function applySceneStyleForMode() {
+  if (!scene) return;
+  if (sceneBackground3D === null && scene.background) {
+    sceneBackground3D = scene.background.clone ? scene.background.clone() : scene.background;
+  }
+  if (is2DMode) {
+    // Neutral technical schematic background
+    scene.background = new THREE.Color(0x0a0f16);
+  } else if (sceneBackground3D) {
+    scene.background = sceneBackground3D.clone ? sceneBackground3D.clone() : sceneBackground3D;
+  }
+
+  scene.traverse((obj) => {
+    if (!obj || !obj.isGridHelper || !obj.material) return;
+    obj.material.opacity = is2DMode ? 0.08 : 0.5;
+    obj.material.transparent = true;
+    obj.visible = true;
+    if (obj.material.color && obj.material.color.setHex) {
+      obj.material.color.setHex(is2DMode ? 0x1a2a3a : 0x003366);
+    }
+  });
+  
+  // Update clusters when entering 2D mode
+  if (is2DMode) {
+    updateClusters();
+  }
+}
+
+function applyDiagramVisibilityForMode() {
+  for (let i = 0; i < meshes.length; i++) {
+    const m = meshes[i];
+    const ud = m.userData || {};
+    if (ud.diagramSprite) ud.diagramSprite.visible = is2DMode;
+    if (is2DMode) {
+      m.visible = false;
+      if (ud.voxel) ud.voxel.visible = false;
+      if (ud.label) ud.label.visible = false;
+      if (ud.timeLabel) ud.timeLabel.visible = false;
+      if (ud.volumeLabel) ud.volumeLabel.visible = false;
+      if (ud.volumeDiv) ud.volumeDiv.style.opacity = '0';
+    }
+  }
+
+  for (let i = 0; i < edgeObjs.length; i++) {
+    const e = edgeObjs[i];
+    if (e.line) e.line.visible = !is2DMode;
+    if (e.arrow) e.arrow.visible = !is2DMode;
+    if (Array.isArray(e.particles)) {
+      for (let j = 0; j < e.particles.length; j++) e.particles[j].visible = !is2DMode;
+    }
+    if (e.diagramLine) e.diagramLine.visible = is2DMode;
+    if (e.diagramArrow) e.diagramArrow.visible = is2DMode;
+  }
+
+  for (let i = 0; i < islandLabels.length; i++) {
+    islandLabels[i].visible = !is2DMode;
+  }
+}
+
+export function setViewMode2D(next2D) {
+  const next = !!next2D;
+  if (is2DMode === next) return;
+  
+  const wasIn2D = is2DMode;
+  is2DMode = next;
+  State.set('viewMode', is2DMode ? '2d' : '3d');
+  
+  const setCamMode = (typeof Visualizer.setCameraMode === 'function') ? Visualizer.setCameraMode : null;
+  const orthoCam = Visualizer.orthoCamera || null;
+  const canUseTrueOrtho = !!(setCamMode && orthoCam);
+
+  if (next) {
+    // Entering 2D schematic mode
+    if (!schematicOverlay) {
+      initSchematicOverlay();
+    }
+    computeSchematicClusters();
+    renderSchematic();
+    schematicVisible = true;
+    if (schematicOverlay) {
+      schematicOverlay.style.display = 'block';
+      schematicOverlay.style.opacity = '1';
+      schematicOverlay.style.pointerEvents = 'auto';
+      schematicCanvas.style.pointerEvents = 'auto';
+    }
+    // Disable 3D controls in 2D mode
+    if (controls) {
+      controls.enableRotate = false;
+      controls.enablePan = false;
+      controls.enableZoom = false;
+      controls.update();
+    }
+  } else {
+    // Entering 3D mode
+    schematicVisible = false;
+    // Completely remove overlay from DOM in 3D mode to ensure no event blocking
+    if (schematicOverlay && schematicOverlay.parentElement) {
+      schematicOverlay.parentElement.removeChild(schematicOverlay);
+      schematicOverlay = null;
+      schematicCanvas = null;
+    }
+    
+    // Always enable 3D controls when entering 3D mode
+    const fit = getCityFitBoundsXZ();
+    if (canUseTrueOrtho) setCamMode(false);
+    if (controls) {
+      controls.enableRotate = true;
+      controls.enablePan = true;
+      controls.enableZoom = true;
+      controls.autoRotate = false;
+      controls.minZoom = 0;
+      controls.maxZoom = Infinity;
+      controls.minDistance = 40;
+      controls.maxDistance = 1400;
+      controls.update();
+    }
+    if (bloomPass) bloomPass.enabled = true;
+  }
+
+  applySceneStyleForMode();
+  applyDiagramVisibilityForMode();
+
+  if (viewModeToggleBtn) {
+    viewModeToggleBtn.classList.toggle('active', is2DMode);
+  }
+  if (viewMode3DBtn) {
+    viewMode3DBtn.classList.toggle('active', !is2DMode);
+  }
+  applySelection(State.selectedNode || null);
+  _cullDirty = true;
+}
+
+function ensureViewModeToggle() {
+  if (typeof document === 'undefined') return;
+
+  const btn2d = document.getElementById('view-mode-2d');
+  const btn3d = document.getElementById('view-mode-3d');
+  if (!btn2d || !btn3d) return;
+
+  viewModeToggleBtn = btn2d;
+  viewMode3DBtn = btn3d;
+
+  if (!btn2d.dataset.modeBound) {
+    btn2d.addEventListener('click', () => setViewMode2D(true));
+    btn2d.dataset.modeBound = '1';
+  }
+  if (!btn3d.dataset.modeBound) {
+    btn3d.addEventListener('click', () => setViewMode2D(false));
+    btn3d.dataset.modeBound = '1';
+  }
+
+  btn2d.classList.toggle('active', is2DMode);
+  btn3d.classList.toggle('active', !is2DMode);
+}
+
+function ensureViewModeHotkey() {
+  if (viewModeHotkeyBound) return;
+  if (typeof window === 'undefined') return;
+
+  window.addEventListener('keydown', (ev) => {
+    if (ev.defaultPrevented || ev.repeat) return;
+    if ((ev.key || '').toLowerCase() !== 'v') return;
+
+    const target = ev.target;
+    const tag = target && target.tagName ? String(target.tagName).toLowerCase() : '';
+    const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (target && target.isContentEditable);
+    if (typing) return;
+
+    ev.preventDefault();
+    setViewMode2D(!is2DMode);
+  });
+
+  viewModeHotkeyBound = true;
+}
+
+function ensureGlobalViewButton() {
+  if (typeof document === 'undefined') return;
+
+  let btn = document.getElementById('btn-global-view');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'btn-global-view';
+    btn.type = 'button';
+    btn.title = 'Vista Global';
+    btn.setAttribute('aria-label', 'Vista Global');
+    btn.innerHTML = '<span aria-hidden="true">🌎</span>';
+    btn.style.cssText = [
+      'position: fixed',
+      'top: 18px',
+      'right: 18px',
+      'z-index: 260',
+      'width: 44px',
+      'height: 44px',
+      'border-radius: 12px',
+      'border: 1px solid rgba(0,243,255,0.45)',
+      'background: rgba(6,14,24,0.82)',
+      'color: #e9f9ff',
+      'font-size: 22px',
+      'display: flex',
+      'align-items: center',
+      'justify-content: center',
+      'cursor: pointer',
+      'box-shadow: 0 10px 24px rgba(0,0,0,0.35)',
+      'backdrop-filter: blur(6px)',
+      '-webkit-backdrop-filter: blur(6px)'
+    ].join(';');
+    document.body.appendChild(btn);
+  }
+
+  globalViewBtn = btn;
+  if (!btn.dataset.globalBound) {
+    btn.addEventListener('click', () => triggerGlobalView(GLOBAL_VIEW_FLIGHT_MS));
+    btn.dataset.globalBound = '1';
+  }
+}
+
+function ensureRadarHUD() {
+  if (radarCanvas && radarCtx) return;
+  if (typeof document === 'undefined') return;
+
+  radarContainer = document.getElementById('city-radar-hud');
+  if (!radarContainer) {
+    radarContainer = document.createElement('div');
+    radarContainer.id = 'city-radar-hud';
+    radarContainer.style.cssText = [
+      'position: fixed',
+      'right: 24px',
+      'bottom: 24px',
+      'width: 228px',
+      'height: 256px',
+      'padding: 12px 12px 10px 12px',
+      'border-radius: 18px',
+      'background: linear-gradient(160deg, rgba(10,18,28,0.62), rgba(5,10,16,0.42))',
+      'backdrop-filter: blur(8px)',
+      '-webkit-backdrop-filter: blur(8px)',
+      'border: 1px solid rgba(180,225,255,0.22)',
+      'box-shadow: 0 10px 30px rgba(0,0,0,0.38), inset 0 0 0 1px rgba(255,255,255,0.05)',
+      'z-index: 220',
+      'pointer-events: auto',
+      'user-select: none',
+      'font-family: "Courier New", monospace',
+      'color: #dff4ff'
+    ].join(';');
+
+    const title = document.createElement('div');
+    title.textContent = 'TACTICAL RADAR';
+    title.style.cssText = 'font-size: 11px; letter-spacing: 1px; opacity: 0.9; margin: 0 0 8px 2px;';
+    radarContainer.appendChild(title);
+
+    document.body.appendChild(radarContainer);
+  }
+
+  radarCanvas = document.getElementById('city-radar-canvas');
+  if (!radarCanvas) {
+    radarCanvas = document.createElement('canvas');
+    radarCanvas.id = 'city-radar-canvas';
+    radarCanvas.width = RADAR_SIZE;
+    radarCanvas.height = RADAR_SIZE;
+    radarCanvas.style.cssText = [
+      'width: 200px',
+      'height: 200px',
+      'display: block',
+      'border-radius: 12px',
+      'border: 1px solid rgba(180,225,255,0.22)',
+      'background: radial-gradient(circle at 35% 35%, rgba(17,34,52,0.95), rgba(8,16,26,0.95))',
+      'cursor: pointer'
+    ].join(';');
+    radarContainer.appendChild(radarCanvas);
+  }
+
+  radarCtx = radarCanvas.getContext('2d');
+  if (!radarCtx) return;
+
+  radarCanvas.addEventListener('click', (ev) => {
+    const keys = Object.keys(islandMeta);
+    if (!keys.length || !radarCanvas) return;
+
+    const rect = radarCanvas.getBoundingClientRect();
+    const x = ((ev.clientX - rect.left) / rect.width) * RADAR_SIZE;
+    const y = ((ev.clientY - rect.top) / rect.height) * RADAR_SIZE;
+
+    const worldRadius = getRadarWorldRadius(keys);
+    let targetKey = null;
+    let bestD2 = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      const meta = islandMeta[k];
+      if (!meta) continue;
+      const p = radarWorldToCanvas(meta.center.x, meta.center.z, worldRadius);
+      const dx = x - p.x;
+      const dy = y - p.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        targetKey = k;
+      }
+    }
+
+    if (targetKey && bestD2 <= RADAR_CLICK_RADIUS * RADAR_CLICK_RADIUS) {
+      flyToIslandCenter(targetKey);
+    }
+  });
+}
+
+function getRadarWorldRadius(keys) {
+  let far = 1;
+  for (let i = 0; i < keys.length; i++) {
+    const meta = islandMeta[keys[i]];
+    if (!meta) continue;
+    const dist = Math.sqrt(meta.center.x * meta.center.x + meta.center.z * meta.center.z) + (meta.radius || 0);
+    if (dist > far) far = dist;
+  }
+  return Math.max(500, far * 1.12);
+}
+
+function radarWorldToCanvas(wx, wz, worldRadius) {
+  const usable = (RADAR_SIZE / 2) - RADAR_PADDING;
+  const scale = usable / Math.max(1, worldRadius);
+  return {
+    x: (RADAR_SIZE / 2) + (wx * scale),
+    y: (RADAR_SIZE / 2) + (wz * scale),
+  };
+}
+
+function drawRadar(now) {
+  if (!radarCtx || !radarCanvas || !camera) return;
+  const keys = Object.keys(islandMeta);
+
+  radarCtx.clearRect(0, 0, RADAR_SIZE, RADAR_SIZE);
+
+  const cx = RADAR_SIZE / 2;
+  const cy = RADAR_SIZE / 2;
+  const ringR = cx - RADAR_PADDING;
+  radarCtx.strokeStyle = 'rgba(120,180,220,0.28)';
+  radarCtx.lineWidth = 1;
+  radarCtx.beginPath();
+  radarCtx.arc(cx, cy, ringR, 0, Math.PI * 2);
+  radarCtx.stroke();
+  radarCtx.beginPath();
+  radarCtx.arc(cx, cy, ringR * 0.62, 0, Math.PI * 2);
+  radarCtx.stroke();
+
+  if (!keys.length) return;
+
+  const worldRadius = getRadarWorldRadius(keys);
+  const blink = (Math.sin(now * 0.012) + 1) * 0.5;
+
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const meta = islandMeta[key];
+    if (!meta) continue;
+
+    const p = radarWorldToCanvas(meta.center.x, meta.center.z, worldRadius);
+    const isBurning = !!islandFireState[key];
+    const group = islandGroups[key];
+    const visible = !group || group.visible !== false;
+
+    radarCtx.beginPath();
+    radarCtx.fillStyle = isBurning
+      ? `rgba(255, 68, 48, ${0.55 + blink * 0.45})`
+      : (visible ? 'rgba(140, 200, 240, 0.90)' : 'rgba(105, 130, 150, 0.45)');
+    radarCtx.arc(p.x, p.y, isBurning ? 5.4 : 4.2, 0, Math.PI * 2);
+    radarCtx.fill();
+  }
+
+  const camP = radarWorldToCanvas(camera.position.x, camera.position.z, worldRadius);
+  const camDir = _tmpVec3b;
+  camera.getWorldDirection(camDir);
+  camDir.y = 0;
+  if (camDir.lengthSq() < 1e-6) camDir.set(0, 0, -1);
+  camDir.normalize();
+
+  const angle = Math.atan2(camDir.z, camDir.x);
+  const coneLen = 26;
+  const spread = 0.34;
+
+  radarCtx.fillStyle = 'rgba(255,245,170,0.18)';
+  radarCtx.beginPath();
+  radarCtx.moveTo(camP.x, camP.y);
+  radarCtx.lineTo(camP.x + Math.cos(angle - spread) * coneLen, camP.y + Math.sin(angle - spread) * coneLen);
+  radarCtx.lineTo(camP.x + Math.cos(angle + spread) * coneLen, camP.y + Math.sin(angle + spread) * coneLen);
+  radarCtx.closePath();
+  radarCtx.fill();
+
+  radarCtx.fillStyle = 'rgba(255,255,255,0.95)';
+  radarCtx.beginPath();
+  radarCtx.arc(camP.x, camP.y, 3.2, 0, Math.PI * 2);
+  radarCtx.fill();
 }
 
 // ── Rebuild City ───────────────────────────────────────
@@ -784,28 +2509,68 @@ export function rebuildCity(graphData, isLiveSync = false) {
   }
 
   [...meshes].forEach(m => {
-    scene.remove(m);
+    const diagramSprite = m.userData?.diagramSprite;
+    if (diagramSprite) {
+      if (diagramSprite.parent) diagramSprite.parent.remove(diagramSprite);
+      if (diagramSprite.material?.map) diagramSprite.material.map.dispose();
+      if (diagramSprite.material) diagramSprite.material.dispose();
+    }
+    if (m.parent) m.parent.remove(m);
     if (m.geometry) m.geometry.dispose();
     if (Array.isArray(m.material)) m.material.forEach(mt => mt.dispose());
     else if (m.material) m.material.dispose();
   });
   meshes.length = 0;
-  voxels.forEach(v => { scene.remove(v); if (v.geometry) v.geometry.dispose(); if (v.material) v.material.dispose(); });
+  diagramNodeTargets.length = 0;
+  voxels.forEach(v => { if (v.parent) v.parent.remove(v); if (v.geometry) v.geometry.dispose(); if (v.material) v.material.dispose(); });
   voxels.length = 0;
   Object.keys(nodeMeshMap).forEach(k => delete nodeMeshMap[k]);
   edgeObjs.forEach(e => {
-    scene.remove(e.line); if (e.line.geometry) e.line.geometry.dispose();
-    e.particles.forEach(p => { scene.remove(p); if (p.geometry) p.geometry.dispose(); });
+    if (e.line.parent) e.line.parent.remove(e.line);
+    if (e.line.geometry) e.line.geometry.dispose();
+    e.particles.forEach(p => { if (p.parent) p.parent.remove(p); if (p.geometry) p.geometry.dispose(); });
+    if (e.arrow) {
+      if (e.arrow.parent) e.arrow.parent.remove(e.arrow);
+      if (e.arrow.line?.geometry) e.arrow.line.geometry.dispose();
+      if (e.arrow.line?.material) e.arrow.line.material.dispose();
+      if (e.arrow.cone?.geometry) e.arrow.cone.geometry.dispose();
+      if (e.arrow.cone?.material) e.arrow.cone.material.dispose();
+    }
+    if (e.diagramLine) {
+      if (e.diagramLine.parent) e.diagramLine.parent.remove(e.diagramLine);
+      if (e.diagramLine.geometry) e.diagramLine.geometry.dispose();
+      if (e.diagramLine.material) e.diagramLine.material.dispose();
+    }
+    if (e.diagramArrow) {
+      if (e.diagramArrow.parent) e.diagramArrow.parent.remove(e.diagramArrow);
+      if (e.diagramArrow.line?.geometry) e.diagramArrow.line.geometry.dispose();
+      if (e.diagramArrow.line?.material) e.diagramArrow.line.material.dispose();
+      if (e.diagramArrow.cone?.geometry) e.diagramArrow.cone.geometry.dispose();
+      if (e.diagramArrow.cone?.material) e.diagramArrow.cone.material.dispose();
+    }
   });
   edgeObjs.length = 0;
   Object.keys(nodeMap).forEach(k => delete nodeMap[k]);
   
   islandLabels.forEach(l => {
-    scene.remove(l);
+    if (l.parent) l.parent.remove(l);
     if (l.material && l.material.map) l.material.map.dispose();
     if (l.material) l.material.dispose();
   });
   islandLabels.length = 0;
+  
+  // Dispose empty island groups (will be recreated on demand)
+  Object.keys(islandGroups).forEach(k => {
+    const g = islandGroups[k];
+    if (g && g.parent) g.parent.remove(g);
+    delete islandGroups[k];
+    delete islandMeta[k];
+  });
+  if (globalArcsGroup) {
+    // Keep globalArcsGroup but ensure it's empty (children removed above via edgeObjs)
+    while (globalArcsGroup.children.length) globalArcsGroup.remove(globalArcsGroup.children[0]);
+  }
+  _cullDirty = true;
   
   // Preserve selection if possible
   const prevSelectedId = selectedNode ? selectedNode.id : null;
@@ -829,8 +2594,15 @@ export function rebuildCity(graphData, isLiveSync = false) {
     labelSprite.name = 'islandLabel';
     labelSprite.scale.set(labelSprite.scale.x * 6, labelSprite.scale.y * 6, 1);
     labelSprite.position.set(projectCenters[p].dx, 600, projectCenters[p].dz);
-    scene.add(labelSprite);
+    _islandParent(p).add(labelSprite);
     islandLabels.push(labelSprite);
+    
+    // Register island metadata for culling. Bounding sphere radius is generous
+    // (we'll refine after positioning nodes, but this is a safe default).
+    islandMeta[p || 'default'] = {
+      center: new THREE.Vector3(projectCenters[p].dx, 0, projectCenters[p].dz),
+      radius: 800
+    };
   });
 
   const lC = {}, lI = {};
@@ -851,6 +2623,23 @@ export function rebuildCity(graphData, isLiveSync = false) {
     n.y = 0; 
     lI[key]++;
     nodeMap[n.id] = n;
+  });
+
+  computeDiagramLayout(nodes);
+
+  // Refine each island's bounding sphere radius from actual node positions.
+  Object.keys(islandMeta).forEach(k => {
+    const meta = islandMeta[k];
+    let maxDistSq = 0;
+    nodes.forEach(n => {
+      if ((n.group || 'default') !== k) return;
+      const dx = n.x - meta.center.x;
+      const dz = n.z - meta.center.z;
+      const d2 = dx*dx + dz*dz;
+      if (d2 > maxDistSq) maxDistSq = d2;
+    });
+    // +200 padding for building height/extent and safety
+    meta.radius = Math.max(400, Math.sqrt(maxDistSq) + 200);
   });
 
   State.set('raw', graphData);
@@ -906,25 +2695,234 @@ function updateDroneMovement() {
   if (keys['KeyD'] || keys['ArrowRight']) { camera.position.addScaledVector(side, moveSpeed); controls.target.addScaledVector(side, moveSpeed); }
 }
 
+// ── Island Visibility (Sector Culling) ─────────────────
+// Hides whole island groups that are far away or fully outside the camera frustum.
+// Three.js then skips traversing & frustum-checking each child individually.
+function updateIslandVisibility() {
+  if (!camera) return;
+  _projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  _frustum.setFromProjectionMatrix(_projScreenMatrix);
+
+  const camPos = camera.position;
+  const keys = Object.keys(islandGroups);
+  for (let i = 0, len = keys.length; i < len; i++) {
+    const k = keys[i];
+    const group = islandGroups[k];
+    const meta = islandMeta[k];
+    if (!group || !meta) continue;
+
+    const dx = camPos.x - meta.center.x;
+    const dz = camPos.z - meta.center.z;
+    const distSq = dx*dx + dz*dz;
+    const farLimit = MAX_RENDER_DISTANCE + meta.radius;
+
+    let visible = true;
+    if (distSq > farLimit * farLimit) {
+      visible = false;
+    } else {
+      _islandSphere.center.copy(meta.center);
+      _islandSphere.radius = meta.radius;
+      visible = _frustum.intersectsSphere(_islandSphere);
+    }
+    if (group.visible !== visible) group.visible = visible;
+  }
+}
+
+// ── Dynamic Resolution Scaling tick ────────────────────
+// Records inter-frame delta, computes a 60-frame moving average, and
+// triggers a downgrade step when avg FPS stays below threshold for sustainedMs.
+function tickDRS(now) {
+  if (!DRS.enabled || !camera || !renderer) return;
+
+  // Capture baselines once (after Visualizer has set up camera/renderer)
+  if (DRS.baseCameraFar === 0) {
+    DRS.baseCameraFar = camera.far;
+    DRS.basePixelRatio = renderer.getPixelRatio ? renderer.getPixelRatio() : (window.devicePixelRatio || 1);
+    DRS.baseRenderDistance = MAX_RENDER_DISTANCE;
+  }
+
+  if (DRS.lastFrameTime === 0) { DRS.lastFrameTime = now; return; }
+  const delta = now - DRS.lastFrameTime;
+  DRS.lastFrameTime = now;
+
+  // Push into ring buffer
+  DRS.deltas[DRS.deltaIdx] = delta;
+  DRS.deltaIdx = (DRS.deltaIdx + 1) % DRS.deltas.length;
+  if (DRS.deltaFilled < DRS.deltas.length) DRS.deltaFilled++;
+
+  // Need a full window before deciding (avoids triggering on warm-up jank)
+  if (DRS.deltaFilled < DRS.deltas.length) return;
+
+  // Moving average FPS over last 60 frames
+  let sum = 0;
+  for (let i = 0; i < DRS.deltas.length; i++) sum += DRS.deltas[i];
+  const avgDelta = sum / DRS.deltas.length;
+  const avgFps = 1000 / avgDelta;
+
+  // Track sustained low FPS
+  if (avgFps < DRS.fpsThreshold) {
+    if (DRS.belowSinceMs === 0) DRS.belowSinceMs = now;
+  } else {
+    DRS.belowSinceMs = 0;
+  }
+
+  if (DRS.step >= DRS.maxSteps) return;                              // safety floor reached
+  if (DRS.belowSinceMs === 0) return;                                // not currently below
+  if (now - DRS.belowSinceMs < DRS.sustainedMs) return;              // not sustained long enough
+  if (now - DRS.lastStepAt < DRS.cooldownMs) return;                 // still in cooldown
+
+  // ── Apply next degradation step ──
+  DRS.step++;
+  DRS.lastStepAt = now;
+  DRS.belowSinceMs = 0;
+  // Reset window so we judge the new step fairly
+  DRS.deltaFilled = 0;
+  DRS.deltaIdx = 0;
+
+  const distMul = DRS.renderDistanceByStep[Math.min(DRS.step, DRS.renderDistanceByStep.length - 1)];
+  const prMul   = DRS.pixelRatioByStep[Math.min(DRS.step, DRS.pixelRatioByStep.length - 1)];
+
+  // Keep render distance at maximum - only degrade pixelRatio for performance
+  const newRenderDist = DRS.baseRenderDistance; // No distance reduction
+  const newCameraFar = Math.max(MIN_GLOBAL_DISTANCE, DRS.baseCameraFar); // Always use global minimum
+  
+  MAX_RENDER_DISTANCE = newRenderDist;
+  camera.far = newCameraFar;
+  camera.updateProjectionMatrix();
+  if (renderer.setPixelRatio) renderer.setPixelRatio(DRS.basePixelRatio * prMul);
+  _cullDirty = true;
+
+  console.warn(
+    `DRS Activado (step ${DRS.step}/${DRS.maxSteps}): Reduciendo calidad visual para salvar FPS ` +
+    `[avgFPS=${avgFps.toFixed(1)}, renderDist=${MAX_RENDER_DISTANCE.toFixed(0)}, pixelRatio=${(DRS.basePixelRatio * prMul).toFixed(2)}]`
+  );
+}
+
 // ── Animation Loop ─────────────────────────────────────
 export function startAnimationLoop() {
+  ensureRadarHUD();
+  ensureViewModeToggle();
+  ensureGlobalViewButton();
+  ensureViewModeHotkey();
+  setViewMode2D(State.viewMode === '2d');
+
+  // Add imposter group to scene for LOD billboard system
+  if (!scene.getObjectByName('imposters')) {
+    scene.add(imposterGroup);
+  }
+
+  // Initialize schematic overlay for 2D mode
+  initSchematicOverlay();
+
+  _drsWarmupUntilMs = performance.now() + 3000;
+
+  // Force culling recompute when the user moves the camera
+  if (controls && !controls.__cullHook) {
+    controls.addEventListener('change', () => {
+      _cullDirty = true;
+      needsUpdate = true;
+      _lastControlChangeTime = performance.now();
+    });
+    controls.__cullHook = true;
+  }
+
+  window.addEventListener('resize', () => {
+    needsUpdate = true;
+  });
+
+  // Sidebar/panel open/close events
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar) {
+    const observer = new MutationObserver(() => { needsUpdate = true; });
+    observer.observe(sidebar, { attributes: true, attributeFilter: ['class'] });
+  }
+
   function animate() {
     requestAnimationFrame(animate);
 
     const dt  = clock.getDelta();
     const t   = clock.getElapsedTime();
     const now = performance.now();
+    const fullRenderOverride = now < _forceFullRenderUntilMs;
+
+    // FPS calculation
+    _frameCountSinceLastUpdate++;
+    if (now - _lastTime >= _fpsUpdateInterval) {
+      const fps = Math.round((_frameCountSinceLastUpdate * 1000) / (now - _lastTime));
+      const fpsEl = document.getElementById('fps-counter');
+      if (fpsEl) fpsEl.textContent = fps;
+      _lastTime = now;
+      _frameCountSinceLastUpdate = 0;
+    }
+
+    // Dynamic Resolution Scaling: degrades quality if avg FPS stays low.
+    // Skip during warm-up period, when user is idle, when engine is not rendering,
+    // when system animation is in progress (camera priority mode), or when DRS is explicitly disabled
+    const isWarmup = now < _drsWarmupUntilMs;
+    const idleTime = now - _lastControlChangeTime;
+    const isIdle = idleTime > 2000;
+    const timeSinceSystemAnim = now - _lastSystemAnimEndMs;
+    const systemAnimCooldown = timeSinceSystemAnim < 10000; // Extended to 10s for global view protection
+    const drsExplicitlyDisabled = now < _drsDisabledUntilMs;
+    
+    // Detect transition from idle to active
+    const wasIdle = _wasIdleLastFrame;
+    _wasIdleLastFrame = isIdle;
+    const justBecameActive = wasIdle && !isIdle && needsUpdate;
+    
+    // Reset DRS buffer when user starts moving after idle to clear stale data
+    if (justBecameActive) {
+      DRS.step = 0;
+      DRS.belowSinceMs = 0;
+      DRS.deltaFilled = 0;
+      DRS.deltaIdx = 0;
+      DRS.lastStepAt = now;
+    }
+    
+    // STRICT DRS BLOCKING: Only run when user is ACTIVELY interacting (not idle)
+    // DRS only activates when user is actively moving camera (last change < 2s ago)
+    const isUserActivelyInteracting = idleTime < 2000;
+    
+    // Only run DRS when actively rendering, not in warmup, not blocked by system animation,
+    // and user is actively interacting (not idle)
+    const drsShouldRun = needsUpdate && !isSystemAnimating && !systemAnimCooldown && !drsExplicitlyDisabled && isUserActivelyInteracting;
+    
+    if (!fullRenderOverride && !isWarmup && drsShouldRun) {
+      tickDRS(now);
+    }
+
+    // Throttled island culling: every N frames OR whenever marked dirty
+    _cullFrameCounter++;
+    if (!fullRenderOverride && !_suspendSectorCulling && (_cullDirty || _cullFrameCounter >= CULL_INTERVAL_FRAMES)) {
+      updateIslandVisibility();
+      _cullFrameCounter = 0;
+      _cullDirty = false;
+    } else if (fullRenderOverride) {
+      const islandKeys = Object.keys(islandGroups);
+      for (let i = 0; i < islandKeys.length; i++) {
+        const g = islandGroups[islandKeys[i]];
+        if (g) g.visible = true;
+      }
+    }
 
     if (camTween) {
       const prog = Math.min(1, (now - camTween.start) / camTween.dur);
-      const ease = prog < 0.5 ? 4 * prog * prog * prog : 1 - Math.pow(-2 * prog + 2, 3) / 2;
+      const ease = camTween.easing ? camTween.easing(prog) : easeInOutCubic(prog);
       camera.position.lerpVectors(camTween.sp, camTween.ep, ease);
       controls.target.lerpVectors(camTween.st, camTween.et, ease);
-      if (prog >= 1) camTween = null;
+      if (camTween.onUpdate) camTween.onUpdate(prog, ease);
+      if (prog >= 1) {
+        const done = camTween;
+        camTween = null;
+        if (done.onComplete) done.onComplete();
+      }
     }
 
     if (controls.autoRotate && !camTween) {
-      camera.position.y = 110 + Math.sin(t * 0.15) * 45;
+      const distToTarget = camera.position.distanceTo(controls.target);
+      if (distToTarget < 1200) {
+        camera.position.y = 110 + Math.sin(t * 0.15) * 45;
+      }
     }
 
     updateDroneMovement();
@@ -933,14 +2931,68 @@ export function startAnimationLoop() {
     const isMimicry = globalElapsed > 1000;
 
     meshes.forEach(m => {
+      // Sector culling: skip all per-mesh work for islands the camera can't see.
+      // This is where the major CPU saving comes from when zoomed/panned away.
+      if (m.parent && m.parent.visible === false) return;
+
       const ud = m.userData;
       const n = ud.node;
+
+      if (is2DMode) {
+        m.visible = false;
+        if (ud.voxel) ud.voxel.visible = false;
+        if (ud.label) ud.label.visible = false;
+        if (ud.timeLabel) ud.timeLabel.visible = false;
+        if (ud.volumeLabel) ud.volumeLabel.visible = false;
+        if (ud.volumeDiv) ud.volumeDiv.style.opacity = '0';
+        if (ud.diagramSprite) {
+          ud.diagramSprite.visible = true;
+          ud.diagramSprite.position.set(getDiagramNodeX(n), 2.2, getDiagramNodeZ(n));
+          ud.diagramSprite.material.opacity = Math.max(0.14, Number(ud.diagramSprite.material.opacity) || 1);
+        }
+        return;
+      }
+
       const isGhost = n.is_dead_end;
       const isBottleneck = n.is_bottleneck;
 
+      // Cache per-frame swell calculations (used 2-3 times below)
+      const dynamicScale = getSwellScaleForNode(n, ud);
+      const swellSeverity = getSwellSeverity(n, ud);
+
+      // OPTIMIZATION: Mesh visibility LOD based on camera distance
+      const distToMesh = camera.position.distanceTo(m.position);
+      const isSelected = (State.selectedNode && State.selectedNode.id === n.id);
+      const inFocus = (!State.selectedNode || critSet.has(n.id));
+      
+      // Hide meshes that are very far from camera to reduce draw calls
+      // Exception: selected nodes, nodes in critical set, and nearby nodes
+      const meshLODThreshold = 4000; // Don't render meshes beyond this distance
+      const shouldRenderMesh = distToMesh < meshLODThreshold || isSelected || inFocus;
+      
+      if (!shouldRenderMesh) {
+        m.visible = false;
+        if (ud.label) ud.label.visible = false;
+        if (ud.timeLabel) ud.timeLabel.visible = false;
+        // Skip expensive updates for hidden mesh
+        return;
+      }
+      
+      // OPTIMIZATION: Simplified rendering for distant nodes (medium LOD)
+      // Reduce material updates for nodes beyond medium distance
+      const isMediumLOD = distToMesh > LOD_MEDIUM_DISTANCE;
+      if (isMediumLOD && !isSelected) {
+        // Skip emissive updates for distant nodes to reduce GPU load
+        if (m.material && Array.isArray(m.material)) {
+          m.material.forEach(mat => {
+            mat.emissiveIntensity = 0.05; // Minimal emissive
+            mat.emissive.setHex(0x000000);
+          });
+        }
+      }
+
       // Height tween
       const baseTargetH = State.perfMode ? ud.perfH : ud.baseH;
-      const dynamicScale = getSwellScaleForNode(n, ud);
       const targetHeightScale = State.dataVolumeMode ? dynamicScale.heightScale : 1.0;
       ud.targetH = baseTargetH * targetHeightScale;
 
@@ -988,12 +3040,21 @@ export function startAnimationLoop() {
         const ratio = label.userData.ratio || 4;
         label.scale.set((13 * ratio) / safeSX, 13 / safeSY, 1);
         const distToLabel = camera.position.distanceTo(m.position);
+        
+        // OPTIMIZATION: Only render labels when camera is close enough
         const labelsEnabled = !!State.showLabels;
         const ghostVisible = !labelsEnabled && !!ud.isHovered;
+        const isSelected = (State.selectedNode && State.selectedNode.id === n.id);
+        const inFocus = (!State.selectedNode || critSet.has(n.id));
+        
+        // LOD-based label rendering: only show when within reasonable distance
+        const labelLODThreshold = 1200; // Don't render labels beyond this distance
+        const shouldRenderLabel = labelsEnabled && inFocus && (distToLabel < labelLODThreshold || isSelected || ghostVisible);
+        
         let targetOpacity = 0;
 
-        if (labelsEnabled) {
-          if (distToLabel <= 850 && sY > 0.1 && m.visible) {
+        if (shouldRenderLabel) {
+          if (sY > 0.1 && m.visible) {
             const tFade = Math.min(1, Math.max(0, (distToLabel - 550) / 300));
             targetOpacity = 1.0 - (tFade * tFade * (3 - 2 * tFade));
           }
@@ -1040,7 +3101,8 @@ export function startAnimationLoop() {
             }
 
             mat.opacity += (targetOpacity - mat.opacity) * 0.1;
-            mat.emissive.lerp(new THREE.Color(targetEmissiveColor), 0.1);
+            _tmpColor.set(targetEmissiveColor);
+            mat.emissive.lerp(_tmpColor, 0.1);
             mat.emissiveIntensity += (targetEmissiveIntensity - mat.emissiveIntensity) * 0.1;
             mat.depthWrite = (mat.opacity > 0.2);
           }
@@ -1056,10 +3118,10 @@ export function startAnimationLoop() {
         const labelsEnabled = !!State.showLabels;
         const ghostVisible = !labelsEnabled && !!ud.isHovered;
         
-        // Time labels only show in Performance Mode. 
-        // We show all of them if close, plus bottlenecks from far away.
+        // OPTIMIZATION: Only show time labels when close or for bottlenecks
+        const timeLabelLODThreshold = 1000; // Stricter threshold for time labels
         const shouldShow = labelsEnabled
-          ? (State.perfMode && (isBottleneck || dist < 2500 || isSelected))
+          ? (State.perfMode && (isBottleneck || dist < timeLabelLODThreshold || isSelected))
           : (State.perfMode && ghostVisible);
 
         if (shouldShow && inFocus) {
@@ -1074,7 +3136,7 @@ export function startAnimationLoop() {
             const flash = (Math.sin(t * 10) + 1) / 2;
             targetOpacity = 0.7 + flash * 0.3;
           } else {
-            targetOpacity = ghostVisible ? 1.0 : Math.min(1.0, (800 - dist) / 150);
+            targetOpacity = ghostVisible ? 1.0 : Math.min(1.0, (600 - dist) / 150);
           }
           const currentOpacity = Number(timeLabel.material.opacity) || 0;
           timeLabel.material.opacity = currentOpacity + (targetOpacity - currentOpacity) * 0.2;
@@ -1101,6 +3163,24 @@ export function startAnimationLoop() {
       }
 
       // ── Data Volume Labels Visibility ──────────────────
+      // Lazy-create CSS2DObject + DOM div the first time this mesh actually
+      // needs to display the volume label. Avoids 450+ DOM nodes at load.
+      if (State.dataVolumeMode && !ud.volumeLabel) {
+        const CSS2DObject = window.CSS2DObject || (THREE.CSS2DObject);
+        if (CSS2DObject) {
+          const volumeDiv = document.createElement('div');
+          volumeDiv.className = 'data-volume-label';
+          volumeDiv.textContent = formatSwellLabel(n, ud);
+          const sStyle = getSeverityStyle(swellSeverity.level);
+          volumeDiv.style.cssText = `background: rgba(0,0,0,0.7); color: ${sStyle.color}; padding: 6px 12px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 12px; font-weight: bold; border: 1px solid ${sStyle.borderColor}; box-shadow: ${sStyle.boxShadow}; pointer-events: none; opacity: 0; transition: opacity 0.3s; white-space: nowrap; text-shadow: ${sStyle.textShadow};`;
+          const volumeLabel = new CSS2DObject(volumeDiv);
+          volumeLabel.position.set(0, ud.baseH + 24, 0);
+          volumeLabel.name = 'volumeLabel';
+          m.add(volumeLabel);
+          ud.volumeLabel = volumeLabel;
+          ud.volumeDiv = volumeDiv;
+        }
+      }
       if (ud.volumeLabel && ud.volumeDiv) {
         const labelsEnabled = !!State.showLabels;
         const ghostVisible = !labelsEnabled && !!ud.isHovered;
@@ -1113,7 +3193,7 @@ export function startAnimationLoop() {
         ud.volumeLabel.visible = m.visible && sY > 0.1 && nextOpacity > 0.03;
 
         const currentMetric = State.dataSwellMetric || 'execution_time';
-        const severityNow = getSwellSeverity(n, ud);
+        const severityNow = swellSeverity;
         const severityChanged = ud.lastSwellSeverity !== severityNow.level;
         if (ud.lastSwellMetric !== currentMetric || shouldShowLabel) {
           ud.volumeDiv.textContent = formatSwellLabel(n, ud);
@@ -1141,7 +3221,7 @@ export function startAnimationLoop() {
       }
 
       // ── Critical Volume Pulse Effect ─────────────────────
-      const pulseSeverity = getSwellSeverity(n, ud).level;
+      const pulseSeverity = swellSeverity.level;
       if (ud.pulseLight && State.dataVolumeMode && pulseSeverity === 'high') {
         ud.pulseLight.visible = true;
         // Pulso de luz tenue: intensidad oscila entre 0.5 y 2.0
@@ -1152,32 +3232,104 @@ export function startAnimationLoop() {
       }
 
       if (vfxManager) {
-        vfxManager.update([m], t, dt, critSet);
+        _vfxBucket[0] = m;
+        vfxManager.update(_vfxBucket, t, dt, critSet);
       }
     });
 
     edgeObjs.forEach(e => {
-      e.particles.forEach(p => {
-        p.userData.t = (p.userData.t + p.userData.speed) % 1;
-        const pos = p.userData.curve.getPoint(p.userData.t);
-        p.position.set(pos.x, pos.y, pos.z);
-      });
+      // Skip particle updates when the edge's parent group is hidden (intra-island).
+      // Inter-island arcs live in globalArcsGroup which is always visible.
+      if (e.parent && e.parent.visible === false) return;
+
+      if (is2DMode) {
+        if (e.line) e.line.visible = false;
+        if (e.arrow) e.arrow.visible = false;
+        if (Array.isArray(e.particles)) {
+          for (let j = 0; j < e.particles.length; j++) e.particles[j].visible = false;
+        }
+
+        if (e.diagramLine) {
+          const src = nodeMap[e.src];
+          const tgt = nodeMap[e.tgt];
+          if (src && tgt) {
+            const a = new THREE.Vector3(getDiagramNodeX(src), 2.0, getDiagramNodeZ(src));
+            const b = new THREE.Vector3(getDiagramNodeX(tgt), 2.0, getDiagramNodeZ(tgt));
+            e.diagramLine.geometry.setFromPoints([a, b]);
+            e.diagramLine.geometry.attributes.position.needsUpdate = true;
+            e.diagramLine.visible = true;
+
+            if (e.diagramArrow) {
+              const dir = b.clone().sub(a);
+              dir.y = 0;
+              if (dir.lengthSq() < 1e-6) dir.set(1, 0, 0);
+              dir.normalize();
+              const len = e.isInterIsland ? 12 : 9;
+              const origin = b.clone().addScaledVector(dir, -len * 0.9);
+              e.diagramArrow.position.copy(origin);
+              e.diagramArrow.setDirection(dir);
+              e.diagramArrow.visible = true;
+            }
+          }
+        }
+        return;
+      }
+
+      if (e.diagramLine) e.diagramLine.visible = false;
+      if (e.diagramArrow) e.diagramArrow.visible = false;
+
+      if (e.arrow) {
+        e.arrow.visible = false;
+      }
+      if (e.diagramArrow) {
+        e.diagramArrow.visible = false;
+      }
+
+      const parts = e.particles;
+      for (let i = 0, len = parts.length; i < len; i++) {
+        const p = parts[i];
+        if (!State.selectedNode && p.scale.x > 1.01) {
+          p.scale.setScalar(1.0);
+        }
+        const ud = p.userData;
+        ud.t = (ud.t + ud.speed) % 1;
+        ud.curve.getPoint(ud.t, _tmpVec3);
+        p.position.copy(_tmpVec3);
+      }
     });
 
     controls.update();
     
-    // Renderizado CSS2D para etiquetas de volumen
-    if (labelRenderer) {
-      labelRenderer.render(scene, camera);
+    // Update grid unfolding/folding animation only when not interacting
+    // to prevent blocking camera controls
+    if (!schematicIsDragging) {
+      updateGridTween(now);
     }
     
-    if (composer) {
-      composer.render();
-    } else {
-      renderer.render(scene, camera);
+    // Always render - no idle-based rendering pause
+    const shouldRender = true;
+    
+    if (shouldRender) {
+      // Renderizado CSS2D para etiquetas de volumen
+      if (labelRenderer) {
+        labelRenderer.render(scene, camera);
+      }
+      
+      if (composer && !is2DMode) {
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
     }
+
+    drawRadar(now);
   }
   animate();
+}
+
+export function getRaycastTargets() {
+  if (is2DMode && diagramNodeTargets.length) return diagramNodeTargets;
+  return meshes;
 }
 
 function _dzHideOverlay() {
