@@ -5,9 +5,10 @@ from typing import Dict, List, Any
 
 class ManifestParser:
     """
-    V4.1 DAG-CITY: Parses dbt manifest.json + optional run_results.json.
+    V1.0 DAG-CITY: Parses dbt manifest.json + optional run_results.json.
     - Extracts real execution_time from run_results if present.
-    - Generates consistent simulated times for demos when run_results is absent.
+    - Honest fallback: if run_results.json is absent, execution_time = 0
+      (the JS layer renders a flat base-plate city and shows "Time: N/A").
     - Identifies performance bottlenecks (top 10% execution time).
     - Applies GIGO validation throughout.
     """
@@ -70,7 +71,7 @@ class ManifestParser:
 
     # ─── Private Helpers ────────────────────────────────────────────
     def _classify_layer(self, res_type: str, file_path: str, fqn: List[str], name: str) -> str:
-        """Staff Data Architect: Sequential Rules Engine V5.0."""
+        """Staff Data Architect: Sequential Rules Engine V1.0."""
         # Rule 1: RAW
         if res_type in ("source", "seed"):
             return "source"
@@ -144,11 +145,67 @@ class ManifestParser:
                 return parsed
         return 0
 
+    def _determine_island_group(self, res_type: str, package_name: str, file_path: str, fqn: List[str], root_project_name: str) -> str:
+        """
+        Hybrid Grouping System: Adapts to different dbt architectures (packages vs monoliths).
+        
+        REGLA 1 (Fuentes y Seeds): Si resource_type es 'source', la isla es "SOURCES". Si es 'seed', la isla es "SEEDS".
+        REGLA 2 (Paquetes Externos): Si package_name != root_project_name, la isla es el nombre del paquete en mayúsculas.
+        REGLA 3 (Carpetas - Para Monolitos): Si package_name == root_project_name, agrupa por estructura de carpetas.
+        REGLA 4 (Fallback): Si la ruta no tiene subcarpetas claras, asígnalo a "CORE".
+        """
+        print(f"[DEBUG HYBRID] res_type={res_type}, package_name={package_name}, root_project_name={root_project_name}")
+        print(f"[DEBUG HYBRID] file_path={file_path}, fqn={fqn}")
+        
+        # REGLA 1: Sources y Seeds
+        if res_type == 'source':
+            print("[DEBUG HYBRID] Rule 1: SOURCES")
+            return "SOURCES"
+        if res_type == 'seed':
+            print("[DEBUG HYBRID] Rule 1: SEEDS")
+            return "SEEDS"
+        
+        # REGLA 2: Paquetes Externos
+        if package_name and package_name != root_project_name:
+            island = package_name.upper().replace('-', '_')
+            print(f"[DEBUG HYBRID] Rule 2: {island} (external package)")
+            return island
+        
+        # REGLA 3: Carpetas para Monolitos (package_name == root_project_name)
+        print("[DEBUG HYBRID] Checking folder structure...")
+        # Intentar usar fqn primero
+        if fqn and len(fqn) >= 2:
+            folder = fqn[1].upper()
+            print(f"[DEBUG HYBRID] fqn[1]={folder}")
+            if folder not in ['DBT', 'MODELS', 'DEFAULT']:
+                print(f"[DEBUG HYBRID] Rule 3 (fqn): {folder}")
+                return folder
+        
+        # Intentar extraer del file_path
+        if file_path:
+            path_normalized = file_path.replace('\\', '/')
+            print(f"[DEBUG HYBRID] path_normalized={path_normalized}")
+            if 'models/' in path_normalized:
+                after_models = path_normalized.split('models/')[-1]
+                parts = after_models.split('/')
+                print(f"[DEBUG HYBRID] after_models={after_models}, parts={parts}")
+                if len(parts) > 1 and parts[0]:
+                    folder = parts[0].upper()
+                    print(f"[DEBUG HYBRID] Rule 3 (file_path): {folder}")
+                    return folder
+        
+        # REGLA 4: Fallback a CORE
+        print("[DEBUG HYBRID] Rule 4: CORE (fallback)")
+        return "CORE"
+
     def _simulate_execution_time(self, name: str) -> float:
         """
-        Generates consistent simulated times.
-        Ensures ~10% are 'Heavy Hitters' (bottlenecks) for demo purposes.
+        DEPRECATED — kept only as a no-op for backward import compatibility.
+        Synthetic data MUST NOT leak into the visualization. Use the
+        dev-only `window.enableMarketingMode()` console hook for demos.
         """
+        return 0.0
+        # ── Dead code below intentionally left for git-blame reference ──
         h = int(hashlib.md5(name.encode()).hexdigest(), 16)
         raw = (h % 10000) / 10000.0
         
@@ -162,7 +219,7 @@ class ManifestParser:
     def _load_run_results(self) -> Dict[str, float]:
         """Loads execution_time per unique_id from run_results.json (optional)."""
         if not os.path.exists(self.run_results_path):
-            print(f"[~] run_results.json not found — using simulated execution times.")
+            print(f"[~] run_results.json not found — execution_time set to 0 for all nodes (Time: N/A).")
             return {}
         try:
             with open(self.run_results_path, "r", encoding="utf-8") as f:
@@ -176,7 +233,7 @@ class ManifestParser:
             print(f"[+] run_results.json loaded: {len(times)} execution times found.")
             return times
         except Exception as e:
-            print(f"[~] Could not parse run_results.json: {e} — using simulated times.")
+            print(f"[~] Could not parse run_results.json: {e} — execution_time defaulted to 0.")
             return {}
 
     # ─── Public API ──────────────────────────────────────────────────
@@ -201,6 +258,10 @@ class ManifestParser:
         parsed_nodes = {}
         links = []
 
+        # Extract root project name for hybrid grouping
+        root_project_name = data.get("metadata", {}).get("project_name", "default")
+        print(f"[DEBUG] root_project_name extracted: {root_project_name}")
+
         # Phase 1: Extract nodes
         nodes_list = list(nodes_data.items())
         for i, (uid, details) in enumerate(nodes_list):
@@ -213,13 +274,23 @@ class ManifestParser:
             name         = details.get("name", uid)
             file_path    = details.get("original_file_path") or details.get("path", "external")
             fqn          = details.get("fqn", [])
+            package_name = details.get("package_name", "")
+            
             layer        = self._classify_layer(res_type, file_path, fqn, name)
             palette      = (self.LAYER_PALETTE.get(layer)
                             or self.MAT_PALETTE.get(materialized)
                             or self.LAYER_PALETTE["default"])
 
-            # Execution time: real > simulated
-            exec_time = run_times.get(uid, self._simulate_execution_time(name))
+            # Determine island group using hybrid grouping system
+            island_group = self._determine_island_group(res_type, package_name, file_path, fqn, root_project_name)
+            print(f"[DEBUG] Node: {name}, package: {package_name}, root: {root_project_name}, file_path: {file_path}, fqn: {fqn}, island: {island_group}")
+
+            # Execution time: ONLY real values from run_results.json. If absent,
+            # we keep 0 (the JS layer treats 0 as "no data" and falls back to
+            # the Uniform base-plate aesthetic). Synthetic data must NEVER leak
+            # into the visualization — if a demo is needed, use the dev-only
+            # window.enableMarketingMode() console hook instead.
+            exec_time = float(run_times.get(uid, 0) or 0)
             row_count = self._extract_row_count(details)
 
             parsed_nodes[uid] = {
@@ -232,14 +303,14 @@ class ManifestParser:
                 "color":         palette["color"],
                 "emissive":      palette["emissive"],
                 "description":   details.get("description", ""),
-                "group":         details.get("package_name", "unknown"),
+                "group":         island_group,
                 "schema":        details.get("schema", "default"),
                 "columns":       self._extract_columns(details),
                 "upstream":      [],
                 "downstream":    [],
                 "execution_time": exec_time,
                 "row_count":     row_count,
-                "time_source":   "real" if uid in run_times else "simulated",
+                "time_source":   "real" if uid in run_times else "none",
                 "is_bottleneck": False,
                 "is_dead_end":   False,
             }

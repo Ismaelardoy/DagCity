@@ -55,7 +55,8 @@ export function initScene() {
 
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.setSize(W, H);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // NOTE: pixelRatio and shadowMap are NOT configured here. setGraphicsQuality
+  // (CityEngine.js) is the single source of truth and is called at boot from main.js.
   container.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();

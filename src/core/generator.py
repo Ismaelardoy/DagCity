@@ -6,7 +6,7 @@ from typing import Dict, Any
 
 class VizGenerator:
     """
-    V5.0 DAG-CITY: Modular Architecture.
+    V1.0 DAG-CITY: Modular Architecture.
     Generates a minimal HTML shell that injects graph data and loads ES6 modules.
     All JS logic has been moved to src/static/js/ modules.
     """
@@ -18,7 +18,7 @@ class VizGenerator:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>DagCity v5.0 | Performance Profiler</title>
+<title>DagCity v1.0 | Performance Profiler</title>
 <style>
 :root {
   --cyan:   #00f3ff;
@@ -100,6 +100,46 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 #btn-global-view:hover {
   border-color: rgba(140,245,255,0.8);
   box-shadow: 0 10px 26px rgba(0,0,0,0.4), 0 0 18px rgba(0,243,255,0.28);
+}
+
+#btn-global-view {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 260;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(0,243,255,0.45);
+  background: rgba(6,14,24,0.82);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+#btn-global-view:hover {
+  background: rgba(0,243,255,0.2);
+  transform: scale(1.05);
+}
+
+#btn-tactical-map {
+  position: fixed;
+  top: 18px;
+  right: 70px;
+  z-index: 260;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(0,243,255,0.45);
+  background: rgba(6,14,24,0.82);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+#btn-tactical-map:hover {
+  background: rgba(0,243,255,0.2);
+  transform: scale(1.05);
 }
 
 #omni-launch {
@@ -290,6 +330,11 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
 #sla-body::-webkit-scrollbar-thumb { background: rgba(0,242,255,0.2); border-radius: 2px; }
 
 .sla-section { padding: 32px 30px; border-bottom: 1px solid rgba(0,242,255,0.06); }
+.graphics-control { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+.graphics-control span { font-size: 12px; letter-spacing: 2px; color: rgba(0,242,255,0.7); text-transform: uppercase; }
+.graphics-control input[type="range"] { flex: 1; -webkit-appearance: none; appearance: none; height: 4px; background: rgba(0,242,255,0.15); border-radius: 2px; outline: none; cursor: pointer; }
+.graphics-control input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #00f3ff; box-shadow: 0 0 12px rgba(0,243,255,0.8); cursor: pointer; }
+.graphics-control input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #00f3ff; box-shadow: 0 0 12px rgba(0,243,255,0.8); cursor: pointer; border: none; }
 .sla-label { font-size: 15px; color: rgba(0,242,255,0.6); letter-spacing: 4px; margin-bottom: 22px; text-transform: uppercase; font-weight: bold; }
 .sla-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .sla-name { font-size: 17px; color: #fff; letter-spacing: 0.5px; }
@@ -744,7 +789,7 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 
 /* ── STATS ── */
 #stats {
-  position: fixed; bottom: 25px; right: 25px; z-index: 50;
+  position: fixed; bottom: 70px; right: 25px; z-index: 50;
   text-align: right; font-size: 16px; color: #ffffff77; letter-spacing: 2px;
   line-height: 2.0; pointer-events: none;
 }
@@ -767,9 +812,10 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
   border-left: 1px solid var(--border);
   box-shadow: -20px 0 60px rgba(0,0,0,0.8);
-  display: flex; flex-direction: column; overflow: hidden;
+  display: none; /* Completely hidden by default - only for 3D view */
+  flex-direction: column; overflow: hidden;
 }
-#sidebar.open { transform: translateX(0); }
+#sidebar.open { transform: translateX(0); display: flex; }
 #sb-stripe { height: 5px; width: 100%; flex-shrink: 0; background: linear-gradient(90deg, var(--cyan), var(--magenta)); }
 #sb-inner { flex: 1; overflow-y: auto; padding: 30px 28px; }
 #sb-inner::-webkit-scrollbar { width: 6px; }
@@ -865,6 +911,23 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 }
 .hud-item#live-sync-hud .status-dot.green { background: #39ff14; box-shadow: 0 0 12px #39ff14; }
 .hud-item#live-sync-hud .status-dot.grey { background: #555; }
+
+/* ── LIVE SYNC / OFFLINE INDICATOR (bottom-right, under #stats) ── */
+#sync-hud-item {
+  position: fixed; bottom: 25px; right: 25px; z-index: 51;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 900;
+  letter-spacing: 1.6px; color: #fff;
+  background: rgba(6,14,24,0.85);
+  border: 1px solid rgba(0,243,255,0.3);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 0 12px rgba(0,0,0,0.4);
+  pointer-events: auto; cursor: default;
+}
+#sync-hud-item .status-dot {
+  width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+}
 .hud-icon { font-size: 16px; opacity: 0.9; }
 .hud-label { color: var(--cyan); font-weight: bold; }
 
@@ -949,7 +1012,7 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 /* Two-column hub */
 .hub-grid {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(300px, 35%) 1fr;
   gap: 0;
   align-items: stretch;
   width: 100%;
@@ -972,21 +1035,92 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
 }
 
-/* Left: Quick View panel */
+/* Left: Saved Projects sidebar */
 .hub-panel-left {
-  padding: 36px 32px;
-  display: flex; flex-direction: column; align-items: center;
+  padding: 36px 28px;
+  display: flex; flex-direction: column; align-items: stretch;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.18);
 }
 .hub-panel-header {
   font-size: 11px; letter-spacing: 5px; color: rgba(255,255,255,0.35);
   margin-bottom: 20px; text-transform: uppercase;
 }
 
-/* Right: Live Pipeline panel */
+/* Right: Main area (Quick View + Live Pipeline stacked) */
 .hub-panel-right {
   padding: 36px 32px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   background: rgba(57,255,20,0.015);
+}
+.hub-panel-main {
+  display: flex; flex-direction: column;
+  padding: 32px;
+  gap: 24px;
+}
+.hub-panel-main > .hub-panel-right {
+  padding: 16px 4px;
+  background: transparent;
+}
+
+/* Project List Styles */
+.project-list {
+  width: 100%;
+  overflow-y: auto;
+  max-height: 400px;
+  padding: 8px;
+  background: rgba(20, 20, 25, 0.6);
+  border-radius: 8px;
+  border: 1px solid rgba(0, 243, 255, 0.2);
+}
+.project-list::-webkit-scrollbar {
+  width: 6px;
+}
+.project-list::-webkit-scrollbar-thumb {
+  background: rgba(0, 243, 255, 0.3);
+  border-radius: 3px;
+}
+
+.project-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(30, 30, 40, 0.8);
+  border: 1px solid rgba(0, 243, 255, 0.25);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.project-card:hover {
+  background: rgba(40, 40, 55, 0.9);
+  border-color: rgba(0, 243, 255, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 243, 255, 0.15);
+}
+
+.project-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-card-name {
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-card-meta {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 #drop-zone {
@@ -1171,16 +1305,11 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 <body>
 <div id="js-error-overlay"></div>
 <div id="canvas-container"></div>
-<div id="graph2d-container"></div>
 <div id="header">DAG_CITY</div>
-<div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V5.2</div>
+<div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V1.0</div>
 
-<div id="view-toggle">
-  <button class="view-pill" id="view-mode-2d">2D MAP</button>
-  <button class="view-pill active" id="view-mode-3d">3D CITY</button>
-</div>
-
-<button id="btn-global-view" type="button" title="Vista Global" aria-label="Vista Global">🌎</button>
+<button id="btn-global-view" type="button" title="Global View (M) — orbit camera around the city" aria-label="Global View">🌎</button>
+<button id="btn-tactical-map" type="button" title="Global Pipeline View" aria-label="Global Pipeline View">🗺️</button>
 
 <button id="omni-launch">⌘/Ctrl + K · Jump to model…</button>
 <div id="omni-modal">
@@ -1189,6 +1318,130 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
     <div id="omni-results"></div>
   </div>
 </div>
+
+<!-- Global Pipeline View Overlay -->
+<div id="tactical-map-overlay" style="display: none;">
+  <div id="tactical-map-container">
+    <div id="tactical-map-header">
+      <h2>GLOBAL PIPELINE VIEW</h2>
+      <button id="close-tactical-map" title="Close">✕</button>
+    </div>
+    <canvas id="tactical-map-canvas"></canvas>
+    <div id="tactical-map-legend">
+      <div class="legend-item">
+        <span class="legend-dot" style="background: rgba(140, 200, 240, 0.9);"></span>
+        <span>Active Islands</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background: rgba(255, 68, 48, 0.9);"></span>
+        <span>Alert Islands</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background: rgba(255, 255, 255, 0.95);"></span>
+        <span>Current Position</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+#tactical-map-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(6, 14, 24, 0.85);
+  backdrop-filter: blur(12px);
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+#tactical-map-container {
+  width: 90%;
+  height: 85%;
+  max-width: 1400px;
+  background: rgba(10, 20, 32, 0.95);
+  border: 2px solid rgba(0, 243, 255, 0.4);
+  border-radius: 16px;
+  padding: 20px;
+  position: relative;
+  box-shadow: 0 0 60px rgba(0, 243, 255, 0.2);
+}
+
+#tactical-map-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  color: #fff;
+}
+
+#tactical-map-header h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: #00f3ff;
+}
+
+#close-tactical-map {
+  background: rgba(255, 68, 48, 0.3);
+  border: 1px solid rgba(255, 68, 48, 0.6);
+  color: #fff;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+#close-tactical-map:hover {
+  background: rgba(255, 68, 48, 0.6);
+  transform: scale(1.05);
+}
+
+#tactical-map-canvas {
+  width: 100%;
+  height: calc(100% - 60px);
+  border-radius: 8px;
+  background: rgba(0, 10, 20, 0.8);
+  cursor: crosshair;
+}
+
+#tactical-map-legend {
+  position: absolute;
+  bottom: 30px;
+  left: 30px;
+  background: rgba(0, 10, 20, 0.9);
+  border: 1px solid rgba(0, 243, 255, 0.3);
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #fff;
+  font-size: 12px;
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+</style>
 
 <!-- AWAITING DATA OVERLAY / HUB -->
 <div id="awaiting-overlay" style="display:none;">
@@ -1204,64 +1457,69 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
     <!-- Two-column Hub Grid -->
     <div class="hub-grid">
 
-      <!-- LEFT: Quick View -->
+      <!-- LEFT COLUMN: Saved Projects -->
       <div class="hub-panel-left">
-        <div class="hub-panel-header">⚡ Quick View</div>
-        <div id="drop-zone" ondragover="dzDragOver(event);" ondragleave="dzDragLeave(event);" ondrop="dzDrop(event);" onclick="document.getElementById('manifest-upload').click();">
-          <div id="dz-icon" class="dz-icon-idle">
-            <svg width="48" height="48" viewBox="0 0 56 56" fill="none">
-              <path d="M28 6v30M16 20l12-14 12 14" stroke="#00f3ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-              <rect x="8" y="38" width="40" height="12" rx="4" stroke="#00f3ff" stroke-width="2" fill="none"/>
-              <circle cx="15" cy="44" r="2" fill="#00f3ff"/>
-              <circle cx="41" cy="44" r="2" fill="#ff00ff"/>
-            </svg>
-          </div>
-          <div id="dz-title" class="dz-title">DRAG &amp; DROP FILES</div>
-          <div id="dz-sub" class="dz-text">manifest.json &nbsp;+&nbsp; run_results.json (optional)<br><span style="font-size:0.72rem;opacity:0.5;">or click to browse</span></div>
-          <div id="dz-slots" style="margin-top:16px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
-            <div id="slot-manifest" class="dz-slot" title="manifest.json">
-              <span class="dz-slot-icon">&#128196;</span>
-              <span id="slot-manifest-name">manifest.json</span>
-              <span id="slot-manifest-check" class="dz-slot-check" style="display:none;">&#10003;</span>
-            </div>
-            <div id="slot-results" class="dz-slot dz-slot-optional" title="run_results.json (optional)">
-              <span class="dz-slot-icon">&#9201;</span>
-              <span id="slot-results-name">run_results.json</span>
-              <span id="slot-results-check" class="dz-slot-check" style="display:none;">&#10003;</span>
-            </div>
-          </div>
-        </div>
-        <input type="file" id="manifest-upload" accept=".json" multiple style="display:none" onchange="dzFileInput(this)">
-        <button id="az-launch-btn" class="az-btn" onclick="dzLaunch()" disabled>&#127961; LAUNCH CITY</button>
-        <div id="upload-status" class="az-status"></div>
-        <div id="az-loader" style="display:none;width:100%;margin-top:16px;">
-          <div class="az-loader-track"><div id="az-loader-bar" class="az-loader-bar"></div></div>
-          <div id="az-loader-label" class="az-loader-label">PARSING ARCHITECTURE…</div>
-        </div>
+        <div class="hub-panel-header">📁 Saved Projects</div>
+        <div id="project-list" class="project-list"></div>
       </div>
 
-      <!-- DIVIDER -->
-      <div class="hub-divider"></div>
+      <!-- RIGHT COLUMN: Quick View + Live Pipeline stacked -->
+      <div class="hub-panel-main">
 
-      <!-- RIGHT: Live Pipeline -->
-      <div class="hub-panel-right">
-        <div class="hub-panel-header">🔴 Live Pipeline</div>
+        <!-- Quick View / Dropzone -->
+        <div class="hub-panel-right">
+          <div class="hub-panel-header">⚡ Quick View</div>
+          <div id="drop-zone" ondragover="dzDragOver(event);" ondragleave="dzDragLeave(event);" ondrop="dzDrop(event);" onclick="document.getElementById('manifest-upload').click();">
+            <div id="dz-icon" class="dz-icon-idle">
+              <svg width="48" height="48" viewBox="0 0 56 56" fill="none">
+                <path d="M28 6v30M16 20l12-14 12 14" stroke="#00f3ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <rect x="8" y="38" width="40" height="12" rx="4" stroke="#00f3ff" stroke-width="2" fill="none"/>
+                <circle cx="15" cy="44" r="2" fill="#00f3ff"/>
+                <circle cx="41" cy="44" r="2" fill="#ff00ff"/>
+              </svg>
+            </div>
+            <div id="dz-title" class="dz-title">DRAG &amp; DROP FILES</div>
+            <div id="dz-sub" class="dz-text">manifest.json &nbsp;+&nbsp; run_results.json (optional)<br><span style="font-size:0.72rem;opacity:0.5;">or click to browse</span></div>
+            <div id="dz-slots" style="margin-top:16px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+              <div id="slot-manifest" class="dz-slot" title="manifest.json">
+                <span class="dz-slot-icon">&#128196;</span>
+                <span id="slot-manifest-name">manifest.json</span>
+                <span id="slot-manifest-check" class="dz-slot-check" style="display:none;">&#10003;</span>
+              </div>
+              <div id="slot-results" class="dz-slot dz-slot-optional" title="run_results.json (optional)">
+                <span class="dz-slot-icon">&#9201;</span>
+                <span id="slot-results-name">run_results.json</span>
+                <span id="slot-results-check" class="dz-slot-check" style="display:none;">&#10003;</span>
+              </div>
+            </div>
+          </div>
+          <input type="file" id="manifest-upload" accept=".json" multiple style="display:none" onchange="dzFileInput(this)">
+          <button id="az-launch-btn" class="az-btn" onclick="dzLaunch()" disabled>&#127961; LAUNCH CITY</button>
+          <div id="upload-status" class="az-status"></div>
+          <div id="az-loader" style="display:none;width:100%;margin-top:16px;">
+            <div class="az-loader-track"><div id="az-loader-bar" class="az-loader-bar"></div></div>
+            <div id="az-loader-label" class="az-loader-label">PARSING ARCHITECTURE…</div>
+          </div>
+        </div>
 
-        <!-- Connect Local -->
-        <button class="lp-btn lp-btn-local" id="btn-connect-local" onclick="connectLocal()">
-          <span class="lp-badge lp-badge-live">LIVE</span>
-          <span class="lp-btn-title">🔗 Connect Local</span>
-          <span class="lp-btn-sub">Mount your dbt project → instant live sync</span>
-        </button>
+        <!-- Live Pipeline -->
+        <div class="hub-panel-right">
+          <div class="hub-panel-header">🔴 Live Pipeline</div>
 
-        <!-- Connect Cloud (Coming Soon) -->
-        <button class="lp-btn lp-btn-cloud" disabled title="Coming Soon">
-          <span class="lp-badge lp-badge-soon">COMING SOON</span>
-          <span class="lp-btn-title">☁️ Connect Cloud</span>
-          <span class="lp-btn-sub">dbt Cloud · Databricks · Snowflake</span>
-        </button>
+          <button class="lp-btn lp-btn-local" id="btn-connect-local" onclick="connectLocal()">
+            <span class="lp-badge lp-badge-live">LIVE</span>
+            <span class="lp-btn-title">🔗 Connect Local</span>
+            <span class="lp-btn-sub">Mount your dbt project → instant live sync</span>
+          </button>
 
-        <div id="lp-status" style="font-size:0.78rem;color:rgba(255,255,255,0.3);letter-spacing:2px;margin-top:8px;">CHECKING ENVIRONMENT…</div>
+          <button class="lp-btn lp-btn-cloud" disabled title="Coming Soon">
+            <span class="lp-badge lp-badge-soon">COMING SOON</span>
+            <span class="lp-btn-title">☁️ Connect Cloud</span>
+            <span class="lp-btn-sub">dbt Cloud · Databricks · Snowflake</span>
+          </button>
+
+          <div id="lp-status" style="font-size:0.78rem;color:rgba(255,255,255,0.3);letter-spacing:2px;margin-top:8px;">CHECKING ENVIRONMENT…</div>
+        </div>
       </div>
     </div>
   </div>
@@ -1404,6 +1662,30 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
         </label>
       </div>
       <div class="sla-desc" style="margin-top:10px;">Enable thermal performance layer and timing labels.</div>
+    </div>
+
+    <div class="sla-section">
+      <div class="sla-label">Graphics Quality</div>
+      <div class="graphics-control">
+        <span>Low</span>
+        <input type="range" id="graphics-slider" min="0" max="1" step="1" value="1">
+        <span>High</span>
+      </div>
+      <div class="sla-desc" style="margin-top:10px;">Optimize for large projects (1000+ nodes): disable bloom, use basic materials, hide particles.</div>
+    </div>
+
+    <div class="sla-section">
+      <div class="sla-label">Render Distance</div>
+      <div class="graphics-control">
+        <span>1k</span>
+        <input type="range" id="render-distance-slider" min="1000" max="10000" step="100" value="2500">
+        <span>10k</span>
+      </div>
+      <div class="sla-row" style="margin-top:8px;">
+        <div class="sla-name">Far Plane</div>
+        <div class="sla-val" id="render-distance-val">2500</div>
+      </div>
+      <div class="sla-desc" style="margin-top:8px;">Maximum view distance. Lower = faster FPS, less city visible at once. Global View temporarily overrides this to fit the whole map.</div>
     </div>
 
     <div class="sla-section">
@@ -1673,10 +1955,11 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
   <div class="hud-item"><span class="hud-icon">🎡</span> <span class="hud-label">SCROLL</span> → ZOOM</div>
   <div style="color:rgba(255,255,255,0.2)">•</div>
   <div class="hud-item"><span class="hud-icon">👆</span> <span class="hud-label">SELECT</span> → INSPECT</div>
-  <div style="color:rgba(255,255,255,0.2)">•</div>
-  <div class="hud-item" id="sync-hud-item" title="Connection Mode">
-    <span id="sync-hud-dot" class="status-dot"></span> <span id="sync-hud-text">CHECKING...</span>
-  </div>
+</div>
+
+<!-- Live sync / offline indicator (under #stats, bottom-right) -->
+<div id="sync-hud-item" title="Connection Mode">
+  <span id="sync-hud-dot" class="status-dot"></span> <span id="sync-hud-text">CHECKING...</span>
 </div>
 
 

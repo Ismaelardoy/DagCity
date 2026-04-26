@@ -40,11 +40,36 @@ let _lastTime = performance.now();
 let _frameCountSinceLastUpdate = 0;
 const _fpsUpdateInterval = 500; // Update FPS display every 500ms
 
+// ── Island Center Calculation System ─────────────────────
+// Calculates and stores the exact (X, Z) center coordinates for each island
+function calculateIslandCenters() {
+  const keys = Object.keys(islandMeta);
+  
+  // Clear existing centers
+  Object.keys(islandCenters).forEach(k => delete islandCenters[k]);
+  
+  // Calculate centers from islandMeta
+  keys.forEach(k => {
+    const meta = islandMeta[k];
+    if (meta && meta.center) {
+      islandCenters[k] = {
+        x: meta.center.x,
+        z: meta.center.z,
+        radius: meta.radius || 400
+      };
+    }
+  });
+  
+  console.log('[Navigation] Island centers calculated:', Object.keys(islandCenters));
+  return islandCenters;
+}
+
 // ── Island grouping & culling ──
 const islandGroups = {};            // group_name -> THREE.Group
 const islandMeta = {};              // group_name -> { center: Vector3, radius: number }
+const islandCenters = {};           // group_name -> { x: number, z: number } (explicit center coordinates)
 let globalArcsGroup = null;         // holds inter-island arcs (never culled)
-let MAX_RENDER_DISTANCE = 6000;     // beyond this, hide island entirely (mutated by DRS)
+let MAX_RENDER_DISTANCE = 50000;    // beyond this, hide island entirely (mutated by DRS)
 const CULL_INTERVAL_FRAMES = 10;    // re-evaluate visibility every N frames
 let _cullFrameCounter = 0;
 let _cullDirty = true;              // forces recompute (e.g. after rebuild or controls change)
@@ -83,7 +108,7 @@ const CLUSTER_DISTANCE_THRESHOLD = 80; // Units for clustering
 let clusterZoomLevel = 1.0;
 
 function updateClusters() {
-  if (!is2DMode || !diagramNodeTargets.length) return;
+  if (!diagramNodeTargets.length) return;
   
   // Simple clustering based on spatial proximity
   const clusters = [];
@@ -119,7 +144,8 @@ function updateClusters() {
   clusterGroups = clusters;
 }
 
-// ── Radar HUD (2D dynamic minimap) ───────────────────
+// ── Radar HUD (Local Radar - Camera Centered) ─────────────
+// Shows only nearby islands within radar radius (not entire world)
 const islandFireState = {}; // islandKey -> boolean
 let radarContainer = null;
 let radarCanvas = null;
@@ -127,11 +153,330 @@ let radarCtx = null;
 const RADAR_SIZE = 200;
 const RADAR_PADDING = 22;
 const RADAR_CLICK_RADIUS = 12;
+const RADAR_VIEW_RADIUS = 3000; // Maximum viewing distance for local radar
 
-// ── View mode (3D / 2D orthographic) ─────────────────
-let is2DMode = false;
-let viewModeToggleBtn = null;
-let viewMode3DBtn = null;
+// ── Tactical Map (Global Map Overlay) ─────────────────
+let tacticalMapOverlay = null;
+let tacticalMapCanvas = null;
+let tacticalMapCtx = null;
+let tacticalMapVisible = false;
+let tacticalMapHotkeyBound = false;
+let tacticalMapIslandPositions = []; // Cache island positions on canvas
+let tacticalMapRenderPending = false; // Flag for deferred rendering
+
+function openTacticalMap() {
+  if (!tacticalMapOverlay) {
+    initTacticalMap();
+  }
+  tacticalMapVisible = true;
+  tacticalMapOverlay.style.display = 'flex';
+  tacticalMapRenderPending = true; // Mark as pending for deferred rendering
+}
+
+function closeTacticalMap() {
+  tacticalMapVisible = false;
+  if (tacticalMapOverlay) {
+    tacticalMapOverlay.style.display = 'none';
+  }
+  tacticalMapRenderPending = false;
+}
+
+function toggleTacticalMap() {
+  if (tacticalMapVisible) {
+    closeTacticalMap();
+  } else {
+    openTacticalMap();
+  }
+}
+
+function initTacticalMap() {
+  if (typeof document === 'undefined') return;
+  
+  tacticalMapOverlay = document.getElementById('tactical-map-overlay');
+  tacticalMapCanvas = document.getElementById('tactical-map-canvas');
+  
+  if (!tacticalMapOverlay || !tacticalMapCanvas) return;
+  
+  // Set canvas size
+  const rect = tacticalMapCanvas.getBoundingClientRect();
+  tacticalMapCanvas.width = rect.width;
+  tacticalMapCanvas.height = rect.height;
+  tacticalMapCtx = tacticalMapCanvas.getContext('2d');
+  
+  // Close button handler
+  const closeBtn = document.getElementById('close-tactical-map');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', closeTacticalMap);
+  }
+  
+  // Canvas click handler for fast travel
+  tacticalMapCanvas.addEventListener('click', handleTacticalMapClick);
+  
+  // Handle window resize
+  window.addEventListener('resize', () => {
+    if (tacticalMapVisible && tacticalMapCanvas) {
+      const rect = tacticalMapCanvas.getBoundingClientRect();
+      tacticalMapCanvas.width = rect.width;
+      tacticalMapCanvas.height = rect.height;
+      renderTacticalMap();
+    }
+  });
+
+  // Bind M key — opens GLOBAL VIEW (cinematic camera). Pipeline View modal
+  // no longer hijacks M (it had a misleading hotkey hint before).
+  bindGlobalViewHotkey();
+}
+
+function bindGlobalViewHotkey() {
+  if (tacticalMapHotkeyBound) return;
+  if (typeof window === 'undefined') return;
+
+  window.addEventListener('keydown', (ev) => {
+    if (ev.defaultPrevented || ev.repeat) return;
+    if ((ev.key || '').toLowerCase() !== 'm') return;
+
+    const target = ev.target;
+    const tag = target && target.tagName ? String(target.tagName).toLowerCase() : '';
+    const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (target && target.isContentEditable);
+    if (typing) return;
+
+    ev.preventDefault();
+    triggerGlobalView(GLOBAL_VIEW_FLIGHT_MS);
+  });
+
+  tacticalMapHotkeyBound = true;
+}
+
+function renderTacticalMap() {
+  if (!tacticalMapCtx || !tacticalMapCanvas || !camera) return;
+  
+  // Check if canvas has valid dimensions
+  const rect = tacticalMapCanvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    console.warn('[TacticalMap] Canvas has zero dimensions, deferring render');
+    // Retry after DOM paints
+    requestAnimationFrame(() => {
+      if (tacticalMapVisible) renderTacticalMap();
+    });
+    return;
+  }
+  
+  // Set canvas size to match display size
+  tacticalMapCanvas.width = rect.width;
+  tacticalMapCanvas.height = rect.height;
+  
+  const ctx = tacticalMapCtx;
+  const width = tacticalMapCanvas.width;
+  const height = tacticalMapCanvas.height;
+  const keys = Object.keys(islandCenters);
+  
+  // Clear canvas
+  ctx.clearRect(0, 0, width, height);
+  
+  // Draw background
+  ctx.fillStyle = 'rgba(0, 10, 20, 0.9)';
+  ctx.fillRect(0, 0, width, height);
+  
+  // Draw grid
+  ctx.strokeStyle = 'rgba(0, 243, 255, 0.1)';
+  ctx.lineWidth = 1;
+  const gridSize = 50;
+  for (let x = 0; x < width; x += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let y = 0; y < height; y += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+  
+  if (!keys.length) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('No islands available', width / 2, height / 2);
+    return;
+  }
+  
+  // Calculate bounding box of all island centers
+  let minX = Infinity, maxX = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  keys.forEach(k => {
+    const center = islandCenters[k];
+    if (center) {
+      minX = Math.min(minX, center.x - (center.radius || 0));
+      maxX = Math.max(maxX, center.x + (center.radius || 0));
+      minZ = Math.min(minZ, center.z - (center.radius || 0));
+      maxZ = Math.max(maxZ, center.z + (center.radius || 0));
+    }
+  });
+  
+  // Add camera position to bounds
+  minX = Math.min(minX, camera.position.x);
+  maxX = Math.max(maxX, camera.position.x);
+  minZ = Math.min(minZ, camera.position.z);
+  maxZ = Math.max(maxZ, camera.position.z);
+  
+  const padding = 100;
+  const worldWidth = (maxX - minX) + padding * 2;
+  const worldHeight = (maxZ - minZ) + padding * 2;
+  const scaleX = width / worldWidth;
+  const scaleZ = height / worldHeight;
+  const scale = Math.min(scaleX, scaleZ) * 0.8;
+  
+  const offsetX = (width - worldWidth * scale) / 2 - minX * scale + padding * scale;
+  const offsetZ = (height - worldHeight * scale) / 2 - minZ * scale + padding * scale;
+  
+  // Clear cache
+  tacticalMapIslandPositions = [];
+  
+  // Draw islands
+  keys.forEach(k => {
+    const center = islandCenters[k];
+    if (!center) return;
+    
+    const canvasX = center.x * scale + offsetX;
+    const canvasY = center.z * scale + offsetZ;
+    const radius = (center.radius || 400) * scale;
+    
+    // Cache position for click detection
+    tacticalMapIslandPositions.push({
+      key: k,
+      x: canvasX,
+      y: canvasY,
+      radius: radius,
+      worldX: center.x,
+      worldZ: center.z
+    });
+    
+    // Draw island circle
+    const isBurning = !!islandFireState[k];
+    const group = islandGroups[k];
+    const visible = !group || group.visible !== false;
+    
+    ctx.beginPath();
+    ctx.fillStyle = isBurning
+      ? 'rgba(255, 68, 48, 0.6)'
+      : (visible ? 'rgba(140, 200, 240, 0.4)' : 'rgba(105, 130, 150, 0.3)');
+    ctx.arc(canvasX, canvasY, radius, 0, Math.PI * 2);
+    ctx.fill();
+    
+    ctx.strokeStyle = isBurning
+      ? 'rgba(255, 68, 48, 0.9)'
+      : (visible ? 'rgba(140, 200, 240, 0.8)' : 'rgba(105, 130, 150, 0.6)');
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // Draw island name
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(k.toUpperCase(), canvasX, canvasY);
+  });
+  
+  // Draw camera position
+  const camX = camera.position.x * scale + offsetX;
+  const camY = camera.position.z * scale + offsetZ;
+  
+  ctx.beginPath();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+  ctx.arc(camX, camY, 8, 0, Math.PI * 2);
+  ctx.fill();
+  
+  ctx.strokeStyle = 'rgba(255, 245, 170, 0.8)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  
+  // Draw camera direction
+  const camDir = _tmpVec3b;
+  camera.getWorldDirection(camDir);
+  camDir.y = 0;
+  if (camDir.lengthSq() < 1e-6) camDir.set(0, 0, -1);
+  camDir.normalize();
+  
+  const dirX = camX + camDir.x * 20;
+  const dirY = camY + camDir.z * 20;
+  
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(255, 245, 170, 0.8)';
+  ctx.lineWidth = 2;
+  ctx.moveTo(camX, camY);
+  ctx.lineTo(dirX, dirY);
+  ctx.stroke();
+  
+  console.log('[TacticalMap] Rendered', keys.length, 'islands');
+}
+
+function handleTacticalMapClick(event) {
+  if (!tacticalMapIslandPositions.length) return;
+  
+  const rect = tacticalMapCanvas.getBoundingClientRect();
+  const clickX = event.clientX - rect.left;
+  const clickY = event.clientY - rect.top;
+  
+  // Check if clicked on an island
+  for (const island of tacticalMapIslandPositions) {
+    const dx = clickX - island.x;
+    const dy = clickY - island.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    
+    if (dist <= island.radius) {
+      // Fast travel to this island using cached world coordinates
+      fastTravelToIsland(island.key, island.worldX, island.worldZ);
+      break;
+    }
+  }
+}
+
+function fastTravelToIsland(islandKey, worldX, worldZ) {
+  if (!camera || !controls) return;
+
+  console.log('[Navigation] Fast travel to island:', islandKey, 'at', worldX, worldZ);
+
+  // Close global pipeline view
+  closeTacticalMap();
+
+  // Compute a high-angle "helicopter" framing using the island radius (if known)
+  const meta = islandMeta[islandKey];
+  const radius = Math.max(400, (meta && meta.radius) || 600);
+
+  // Camera target sits at the island center (slightly raised for nicer framing)
+  const targetFocus = new THREE.Vector3(worldX, 30, worldZ);
+
+  // Place the camera above and pulled back along -Z (high pitch, isometric feel)
+  const heightOffset = Math.max(900, radius * 2.2);
+  const distanceOffset = Math.max(700, radius * 1.6);
+  const targetPos = new THREE.Vector3(worldX, heightOffset, worldZ + distanceOffset);
+
+  tweenCamera(targetPos, targetFocus, 1500, {
+    easing: easeInOutCubic,
+    onComplete: () => {
+      if (controls) {
+        controls.autoRotate = false;
+        controls.update();
+      }
+    }
+  });
+}
+
+function ensureTacticalMapButton() {
+  if (typeof document === 'undefined') return;
+
+  const btn = document.getElementById('btn-tactical-map');
+  if (!btn) return;
+
+  if (!btn.dataset.mapBound) {
+    btn.addEventListener('click', toggleTacticalMap);
+    btn.dataset.mapBound = '1';
+  }
+}
+
+// ── View mode (3D only) ─────────────────────────────────────
 let globalViewBtn = null;
 let viewModeHotkeyBound = false;
 let sceneBackground3D = null;
@@ -185,13 +530,10 @@ function calculateGridLayoutForIsland(islandKey) {
     return nameA.localeCompare(nameB);
   });
   
-  // Calculate grid dimensions
-  const nodeCount = islandMeshes.length;
-  const cols = Math.ceil(Math.sqrt(nodeCount));
-  const rows = Math.ceil(nodeCount / cols);
-  
-  const paddingX = SCHEMATIC_NODE_WIDTH * 1.5;
-  const paddingY = SCHEMATIC_NODE_HEIGHT * 1.5;
+  // Grid Wrap Layout Parameters (same as main layout)
+  const maxPerRow = 20;
+  const spacingZ = 150;
+  const spacingX = 150;
   
   // Get island center
   let centerX = 0, centerZ = 0;
@@ -205,16 +547,16 @@ function calculateGridLayoutForIsland(islandKey) {
   centerX /= islandMeshes.length;
   centerZ /= islandMeshes.length;
   
-  // Calculate grid positions
+  // Calculate grid positions using Grid Wrap logic
   const targetPositions = [];
   for (let i = 0; i < islandMeshes.length; i++) {
     const mesh = islandMeshes[i];
-    const col = i % cols;
-    const row = Math.floor(i / cols);
+    const col = i % maxPerRow;
+    const row = Math.floor(i / maxPerRow);
     
     // Center the grid around the island center
-    const offsetX = (col - (cols - 1) / 2) * paddingX;
-    const offsetZ = (row - (rows - 1) / 2) * paddingY;
+    const offsetX = (col - (Math.min(islandMeshes.length, maxPerRow) - 1) / 2) * spacingZ;
+    const offsetZ = (row - Math.floor((islandMeshes.length - 1) / maxPerRow) / 2) * spacingX;
     
     const targetX = centerX + offsetX;
     const targetZ = centerZ + offsetZ;
@@ -288,7 +630,7 @@ function updateGridTween(now) {
     if (!original) continue;
     
     // Interpolate between original and target
-    const isUnfolding = is2DMode;
+    const isUnfolding = false;
     const start = isUnfolding ? original : gridTargetPositions.get(mesh.uuid);
     const end = isUnfolding ? target : original;
     
@@ -738,6 +1080,22 @@ const DRS = {
 // ── Constants ──────────────────────────────────────────
 export const LAYER_X = { source: -300, staging: -100, intermediate: 100, mart: 300, consumption: 500, default: 650 };
 
+// ─────────────────────────────────────────────────────────
+// LAYOUT CONFIG — Tune the city footprint by editing these.
+// Increase `nodeSpacingX/Z` to spread cubes inside a block.
+// Increase/decrease `groupSpacing` to widen/tighten corridors
+// between layer blocks. `maxPerRow` controls grid wrap width.
+// ─────────────────────────────────────────────────────────
+export const LAYOUT_CONFIG = {
+  // Spacing between cubes inside the same color block (Micro-layout)
+  nodeSpacingX: 60,
+  nodeSpacingZ: 60,
+  // Maximum buildings per row before wrapping to a new row
+  maxPerRow: 20,
+  // Corridor between blocks of different colors (Macro-layout)
+  groupSpacing: 250,
+};
+
 // ── Data Volume Scaling ───────────────────────────────
 const CRITICAL_VOLUME_THRESHOLD = 100000000; // 100M filas
 const LOG_SCALE_FACTOR = 0.3; // Factor de escalado logarítmico
@@ -774,6 +1132,9 @@ function resolveRowMetric(n) {
 }
 
 function resolveSwellMetricValue(n, ud, metric) {
+  // Uniform base plate: every node gets the same neutral value.
+  if (metric === 'uniform') return 1;
+
   if (metric === 'rows') {
     const { rows } = resolveRowMetric(n);
     return Math.max(1, rows);
@@ -801,7 +1162,11 @@ function resolveSwellMetricValue(n, ud, metric) {
 }
 
 function getSwellScaleForNode(n, ud) {
-  const metric = State.dataSwellMetric || 'execution_time';
+  const metric = State.dataSwellMetric || 'uniform';
+  // Uniform base plate: identical 1.0 scale for every node — clean honest look.
+  if (metric === 'uniform') {
+    return { widthScale: 1.0, heightScale: 1.0, weight: 0 };
+  }
   const intensity = Math.max(0.5, Math.min(3.0, Number(State.dataSwellIntensity) || 1.0));
   const metricValue = resolveSwellMetricValue(n, ud, metric);
   const userDefinedThreshold = Math.max(
@@ -884,7 +1249,9 @@ function formatCompactNumber(value) {
 }
 
 function formatSwellLabel(n, ud) {
-  const metric = State.dataSwellMetric || 'execution_time';
+  const metric = State.dataSwellMetric || 'uniform';
+
+  if (metric === 'uniform') return 'Base';
 
   if (metric === 'rows') {
     const { rows, estimated } = resolveRowMetric(n);
@@ -902,8 +1269,27 @@ function formatSwellLabel(n, ud) {
     return `${deps} links`;
   }
 
+  // execution_time: be honest when there's no real data for this node.
   const exec = toPositiveNumber(n.execution_time);
+  if (exec <= 0 || n.time_source === 'none') return 'Time: N/A';
   return `${exec.toFixed(2)}s`;
+}
+
+// ─────────────────────────────────────────────────────────
+// Single source of truth for the "is this node's execution_time displayable?"
+// question. Used by every label and UI surface so we never render a number
+// next to a "no data" message simultaneously.
+// ─────────────────────────────────────────────────────────
+export function hasDisplayableTime(n) {
+  if (!n) return false;
+  const src = n.time_source;
+  if (src !== 'real' && src !== 'marketing') return false;
+  const t = Number(n.execution_time);
+  return Number.isFinite(t) && t > 0;
+}
+
+export function formatTimeLabel(n) {
+  return hasDisplayableTime(n) ? `${Number(n.execution_time).toFixed(2)}s` : 'Time: N/A';
 }
 
 /**
@@ -969,6 +1355,46 @@ let camTween = null;
 let cinematicFlightActive = false;
 let cinematicPrevDRSEnabled = true;
 export const GLOBAL_VIEW_FLIGHT_MS = 2000;
+
+// ─────────────────────────────────────────────────────────
+// USER RENDER DISTANCE — pro feature.
+// The user's chosen camera.far value (slider 1000–10000). Persisted globally
+// in localStorage under 'dagcity_render_distance'. Authoritative whenever the
+// camera is NOT in Global View. When Global View is active, camera.far is
+// temporarily expanded to fit the whole island ring, and is restored to this
+// value the moment the user grabs the camera (controls 'start' event).
+// ─────────────────────────────────────────────────────────
+let userRenderDistance = (() => {
+  try {
+    const v = parseInt(localStorage.getItem('dagcity_render_distance') || '2500', 10);
+    return (Number.isFinite(v) && v >= 500) ? v : 2500;
+  } catch (_) { return 2500; }
+})();
+let isGlobalViewActive = false;
+// Snapshot of OrbitControls settings BEFORE Global View mutates them, so an
+// interrupt or completion can put the user back into their normal navigation.
+let _preGlobalViewControlsState = null;
+
+export function getUserRenderDistance() { return userRenderDistance; }
+
+export function setUserRenderDistance(v) {
+  const val = Math.max(500, Math.min(20000, parseInt(v, 10) || 2500));
+  userRenderDistance = val;
+  try { localStorage.setItem('dagcity_render_distance', String(val)); } catch (_) {}
+  // Apply immediately ONLY if not currently in Global View (which has its own
+  // larger far plane). Global View → user-distance restoration happens on
+  // controls 'start' (see registerControlsInterruptHandler).
+  if (!isGlobalViewActive && camera) {
+    camera.far = val;
+    camera.updateProjectionMatrix();
+  }
+  // Sync DRS baselines so the dynamic resolution scaler doesn't push it back.
+  if (DRS) {
+    DRS.baseCameraFar = val;
+    DRS.baseRenderDistance = Math.max(DRS.baseRenderDistance || 0, val);
+  }
+  needsUpdate = true;
+}
 const GLOBAL_VIEW_FIT_MULTIPLIER = 1.35;
 const GLOBAL_VIEW_ALTITUDE_BIAS = 0.75;
 const GLOBAL_VIEW_ALTITUDE_OFFSET = 180;
@@ -1178,6 +1604,54 @@ export function makeTimeSprite(text, isBottleneck) {
   return sp;
 }
 
+// ─────────────────────────────────────────────────────────
+// VOLUME SPRITE — same GPU-only pipeline as makeTimeSprite. Replaces the old
+// CSS2DObject + DOM-div approach which was creating per-node DOM elements
+// and traversing the entire scene every frame. Uses a single CanvasTexture
+// per node, blended additively, raycast-disabled.
+// ─────────────────────────────────────────────────────────
+const _SEVERITY_COLOR = { high: '#ff4400', mid: '#ffd700', low: '#00f3ff' };
+
+function _drawVolumeCanvas(canvas, text, severityLevel, isLowGfx) {
+  const ctx = canvas.getContext('2d');
+  const col = _SEVERITY_COLOR[severityLevel] || _SEVERITY_COLOR.low;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.font = `bold 84px 'Courier New'`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // Skip the expensive shadow blur in LOW (canvas shadows are slow).
+  if (!isLowGfx) {
+    ctx.shadowColor = col; ctx.shadowBlur = 24;
+  } else {
+    ctx.shadowBlur = 0;
+  }
+  ctx.fillStyle = col;
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+}
+
+export function makeVolumeSprite(text, severityLevel, isLowGfx = false) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 200;
+  _drawVolumeCanvas(c, text, severityLevel, isLowGfx);
+  const tex = new THREE.CanvasTexture(c);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthTest: false, blending: THREE.AdditiveBlending
+  }));
+  sp.scale.set(36, 14.4, 1);
+  sp.raycast = () => {};
+  // Stash the canvas so the animate loop can repaint without re-allocating.
+  sp.userData = { canvas: c, text, severityLevel, isLowGfx };
+  return sp;
+}
+
+// Repaint sprite texture in-place (cheap-ish: canvas redraw + tex.needsUpdate).
+function refreshVolumeSprite(sp, text, severityLevel, isLowGfx) {
+  const ud = sp.userData || (sp.userData = {});
+  if (ud.text === text && ud.severityLevel === severityLevel && ud.isLowGfx === isLowGfx) return;
+  _drawVolumeCanvas(ud.canvas, text, severityLevel, isLowGfx);
+  if (sp.material && sp.material.map) sp.material.map.needsUpdate = true;
+  ud.text = text; ud.severityLevel = severityLevel; ud.isLowGfx = isLowGfx;
+}
+
 function getLayerDiagramColor(layer) {
   const l = String(layer || '').toLowerCase();
   if (l === 'source') return '#7ad8a1';
@@ -1302,11 +1776,19 @@ function makeVoxelMesh(col) {
 }
 
 // ── Height Calculation ─────────────────────────────────
+// HONESTY RULE: when there is no real execution_time data (run_results.json
+// missing), the city must render as a flat base-plate. Heights only vary
+// when we genuinely know how long each node takes to run.
+const FLAT_PLATE_HEIGHT = 14;
 export function calcHeight(n, perf) {
   if (perf) {
+    if (!hasReal) return FLAT_PLATE_HEIGHT; // no real data → flat
     const norm = maxTime > minTime ? (n.execution_time - minTime) / (maxTime - minTime) : 0.5;
     return 6 + norm * 64;
   }
+  // Default (non-perf) city: flat unless we have real data to justify
+  // connectivity-based height variations.
+  if (!hasReal) return FLAT_PLATE_HEIGHT;
   return 14 + (n.downstream?.length || 0) * 5 + (n.upstream?.length || 0) * 2;
 }
 
@@ -1378,15 +1860,23 @@ export function buildBuilding(n) {
   const sp = makeSprite(n.name, col);
   sp.position.set(0, h + 8, 0); sp.name = 'label'; mesh.add(sp); mesh.userData.label = sp;
 
-  const timeSp = makeTimeSprite(`${n.execution_time.toFixed(2)}s`, n.is_bottleneck);
+  const timeSp = makeTimeSprite(formatTimeLabel(n), n.is_bottleneck);
   timeSp.position.set(0, h + 25, 0); timeSp.visible = false; timeSp.name = 'timeLabel';
   mesh.add(timeSp); mesh.userData.timeLabel = timeSp;
 
-  // ── Data Volume Label (lazy) ──────────────────────────
-  // CSS2DObject + DOM div per node was creating 450+ DOM elements upfront.
-  // We now create them lazily in the render loop only when Data Volume Mode is active.
+  // ── Data Volume Label (Sprite, GPU-only) ───────────────
+  // Eagerly created exactly like the time label: ONE Sprite per node, with a
+  // CanvasTexture that gets repainted in-place when the metric/severity change.
+  // No CSS2DObject, no DOM nodes, no labelRenderer pass.
+  const volSp = makeVolumeSprite(formatSwellLabel(n, mesh.userData), severity.level, State.graphicsMode === 'low');
+  volSp.position.set(0, h + 25, 0);
+  volSp.visible = false;
+  volSp.material.opacity = 0;
+  volSp.name = 'volumeLabel';
+  mesh.add(volSp);
+  mesh.userData.volumeLabel = volSp;
   mesh.userData.volumeLabelOffset = 28;
-  mesh.userData.lastSwellMetric = State.dataSwellMetric || 'execution_time';
+  mesh.userData.lastSwellMetric = State.dataSwellMetric || 'uniform';
   mesh.userData.lastSwellSeverity = severity.level;
 
   // PointLight pulse for critical volume removed (perf). Pulse is now done via
@@ -1410,7 +1900,10 @@ export function buildEdge(link) {
   const srcId = typeof link.source==='object'?link.source.id:link.source;
   const tgtId = typeof link.target==='object'?link.target.id:link.target;
   const src = nodeMap[srcId], tgt = nodeMap[tgtId];
-  if (!src || !tgt) return;
+  if (!src || !tgt) {
+    console.warn('[buildEdge] Skipping link, missing node:', { srcId, tgtId, hasSrc: !!src, hasTgt: !!tgt });
+    return;
+  }
   
   const isInterIsland = (src.group || 'default') !== (tgt.group || 'default');
 
@@ -1446,20 +1939,20 @@ export function buildEdge(link) {
     : _islandParent(src.group);
   arcParent.add(line);
 
-  // Direction marker (visible in top-down 2D mode)
-  const arrowOrigin = curve.getPoint(0.58);
-  const arrowDir = B.clone().sub(A);
-  arrowDir.y = 0;
-  if (arrowDir.lengthSq() < 1e-6) arrowDir.set(1, 0, 0);
-  arrowDir.normalize();
-  const arrowLen = isInterIsland ? 34 : 24;
-  const arrow = new THREE.ArrowHelper(arrowDir, arrowOrigin, arrowLen, color, arrowLen * 0.42, arrowLen * 0.24);
-  arrow.line.material.transparent = true;
-  arrow.line.material.opacity = opacity;
-  arrow.cone.material.transparent = true;
-  arrow.cone.material.opacity = opacity;
-  arrow.renderOrder = 12;
-  arcParent.add(arrow);
+  // Arrows removed entirely from the visualization. Direction is conveyed by
+  // the moving particles in HIGH mode and by the arc curvature itself.
+  const arrows = [];
+
+  // Store edge with arrows array
+  edgeObjs.push({
+    src: srcId,
+    tgt: tgtId,
+    line,
+    arrows, // Array of arrows instead of single arrow
+    isInterIsland,
+    particles: [],
+    curve
+  });
 
   const diagramA = new THREE.Vector3(getDiagramNodeX(src), 2.0, getDiagramNodeZ(src));
   const diagramB = new THREE.Vector3(getDiagramNodeX(tgt), 2.0, getDiagramNodeZ(tgt));
@@ -1491,6 +1984,8 @@ export function buildEdge(link) {
   diagramArrow.renderOrder = 34;
   arcParent.add(diagramArrow);
   
+  // Always create particles. Visibility is controlled by setGraphicsQuality so
+  // toggling LOW↔HIGH via slider works without rebuilding edges.
   const N = isInterIsland ? 12 : 5;
   const particles = [];
   for (let i = 0; i < N; i++) {
@@ -1500,13 +1995,18 @@ export function buildEdge(link) {
     const tgtNode = nodeMap[tgtId];
     const isAccelerated = tgtNode && tgtNode.layer === 'mart';
     const baseSpeed = isInterIsland ? 0.002 : 0.005;
-    p.userData = { curve, t: i/N, speed: isAccelerated ? baseSpeed * 1.8 : baseSpeed };
+    const speed0 = isAccelerated ? baseSpeed * 1.8 : baseSpeed;
+    p.userData = { curve, t: i/N, speed: speed0, baseSpeed: speed0 };
+    p.visible = true;
     arcParent.add(p); particles.push(p);
   }
-  edgeObjs.push({
-    line, particles, curve, src: srcId, tgt: tgtId, isInterIsland, parent: arcParent, arrow,
-    diagramLine, diagramArrow,
-  });
+  
+  // Update the edgeObj with particles and diagram elements
+  const edgeObj = edgeObjs[edgeObjs.length - 1];
+  edgeObj.particles = particles;
+  edgeObj.parent = arcParent;
+  edgeObj.diagramLine = diagramLine;
+  edgeObj.diagramArrow = diagramArrow;
 }
 
 export function zoomToFitAll(durationMs = GLOBAL_VIEW_FLIGHT_MS) {
@@ -1540,7 +2040,7 @@ export function updateFires() {
 
     if (wasBottleneck !== n.is_bottleneck && m.userData.timeLabel) {
       const oldSprite = m.userData.timeLabel;
-      const newSprite = makeTimeSprite(`${n.execution_time.toFixed(2)}s`, n.is_bottleneck);
+      const newSprite = makeTimeSprite(formatTimeLabel(n), n.is_bottleneck);
       newSprite.position.copy(oldSprite.position);
       newSprite.scale.copy(oldSprite.scale);
       newSprite.visible   = oldSprite.visible;
@@ -1600,7 +2100,12 @@ export function applySelection(node) {
       // GHOST MODE: Subtle outlines and labels for reference
       if (child.isLineSegments) child.material.opacity = inSet ? (isBlastSource ? 1.0 : 0.92) : (blastMode ? 0.03 : 0.05);
       if (child.isLight)  child.intensity = inSet ? (isBlastSource ? 6.2 : 2.0) : 0.0;
-      if (child.isSprite) child.material.opacity = inSet ? 1.0 : (blastMode ? 0.03 : 0.08);
+      // Skip time/volume labels — they have their own per-frame opacity logic
+      // in the animate loop (distance culling + ease-in). Touching them here
+      // causes a one-frame flash when clicking on empty space.
+      if (child.isSprite && child.name !== 'timeLabel' && child.name !== 'volumeLabel') {
+        child.material.opacity = inSet ? 1.0 : (blastMode ? 0.03 : 0.08);
+      }
     });
   });
   edgeObjs.forEach(e => {
@@ -1616,13 +2121,15 @@ export function applySelection(node) {
     e.line.material.opacity   = focusNode ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : (blastMode ? 0.0 : 0.0)) : (e.isInterIsland ? 0.8 : 0.45);
     e.line.material.color.copy(focusNode ? (inPath ? (blastMode ? blastColor : highlightColor) : ghostColor) : defaultColor);
     e.line.renderOrder = inPath ? 10 : 0;
-    if (e.arrow) {
+    if (e.arrows && Array.isArray(e.arrows)) {
       const arrowOpacity = e.line.material.opacity;
-      e.arrow.line.material.opacity = arrowOpacity;
-      e.arrow.cone.material.opacity = arrowOpacity;
-      e.arrow.line.material.color.copy(e.line.material.color);
-      e.arrow.cone.material.color.copy(e.line.material.color);
-      e.arrow.visible = arrowOpacity > 0.01;
+      e.arrows.forEach(arrow => {
+        arrow.line.material.opacity = arrowOpacity;
+        arrow.cone.material.opacity = arrowOpacity;
+        arrow.line.material.color.copy(e.line.material.color);
+        arrow.cone.material.color.copy(e.line.material.color);
+        arrow.visible = arrowOpacity > 0.01;
+      });
     }
 
     if (e.diagramLine) {
@@ -1677,7 +2184,71 @@ function easeInOutCubic(x) {
   return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 }
 
+// ─────────────────────────────────────────────────────────
+// CONTROLS INTERRUPT HANDLER — bound once, lazily, on first tween.
+// When the user grabs the camera (mouse-down / touch / wheel start), we:
+//  1) Kill any in-flight cinematic camTween IMMEDIATELY (no further onUpdate
+//     calls, no FPS-killing forced re-renders during user interaction).
+//  2) If we were in Global View, deactivate it and clamp camera.far back to
+//     the user's chosen render distance — instant FPS recovery on huge maps.
+// ─────────────────────────────────────────────────────────
+// Restore OrbitControls to whatever state they were in BEFORE Global View.
+// Idempotent; only restores if a snapshot exists.
+function _restoreControlsAfterGlobalView() {
+  if (!controls || !_preGlobalViewControlsState) return;
+  const s = _preGlobalViewControlsState;
+  controls.autoRotate      = s.autoRotate;
+  controls.autoRotateSpeed = s.autoRotateSpeed;
+  controls.maxDistance     = s.maxDistance;
+  controls.minDistance     = s.minDistance;
+  controls.enableDamping   = s.enableDamping;
+  controls.dampingFactor   = s.dampingFactor;
+  controls.zoomSpeed       = s.zoomSpeed;
+  controls.enablePan       = s.enablePan;
+  _preGlobalViewControlsState = null;
+}
+
+let _controlsInterruptBound = false;
+function _bindControlsInterruptHandler() {
+  if (_controlsInterruptBound || !controls || typeof controls.addEventListener !== 'function') return;
+  _controlsInterruptBound = true;
+  controls.addEventListener('start', () => {
+    // 1. Kill camera tween immediately.
+    if (camTween) {
+      camTween = null;
+      cinematicFlightActive = false;
+      isSystemAnimating = false;
+      _suspendSectorCulling = false;
+      // Restore DRS (was disabled by the cinematic flight).
+      if (DRS) DRS.enabled = cinematicPrevDRSEnabled;
+    }
+    // 2. Exit Global View — restore user-chosen render distance + controls.
+    if (isGlobalViewActive) {
+      isGlobalViewActive = false;
+      if (camera) {
+        camera.far = userRenderDistance || 2500;
+        camera.updateProjectionMatrix();
+      }
+      if (DRS) {
+        DRS.baseCameraFar = userRenderDistance || 2500;
+        DRS.baseRenderDistance = userRenderDistance || 2500;
+      }
+      MAX_RENDER_DISTANCE = userRenderDistance || 2500;
+      _cullDirty = true;
+      // CRITICAL: put OrbitControls back to the user's normal navigation feel
+      // (autoRotate off, original min/maxDistance, original zoom/damping).
+      _restoreControlsAfterGlobalView();
+      console.log('[CityEngine] Global View interrupted — controls + far plane restored');
+    } else if (controls && controls.autoRotate) {
+      // Edge case: tween already finished but the user never interacted yet.
+      // Still kill the auto-rotation on first user input.
+      controls.autoRotate = false;
+    }
+  });
+}
+
 export function tweenCamera(to, toTarget, dur=1200, options = null) {
+  _bindControlsInterruptHandler();
   const cfg = options || {};
   camTween = {
     sp: camera.position.clone(), st: controls.target.clone(),
@@ -1691,7 +2262,7 @@ export function tweenCamera(to, toTarget, dur=1200, options = null) {
 }
 
 export function fitCameraToAll(durationMs = 1500) {
-  if (!camera || !controls || is2DMode) return;
+  if (!camera || !controls) return;
 
   const keys = Object.keys(islandGroups);
   if (!keys.length) return;
@@ -1736,7 +2307,19 @@ export function fitCameraToAll(durationMs = 1500) {
 
   const center = worldBox.getCenter(new THREE.Vector3());
   const size = worldBox.getSize(new THREE.Vector3());
-  const focusCenter = new THREE.Vector3(center.x, 0, center.z);
+
+  // Compute focusCenter from REAL island centroids (not Box3, which is polluted
+  // by the 2000x2000 invisible floor plane). Falls back to scene center.
+  let _ix = 0, _iz = 0, _in = 0;
+  const _ikeys = Object.keys(islandMeta);
+  for (let i = 0; i < _ikeys.length; i++) {
+    const m = islandMeta[_ikeys[i]];
+    if (!m || !m.center) continue;
+    _ix += m.center.x; _iz += m.center.z; _in++;
+  }
+  const focusCenter = _in > 0
+    ? new THREE.Vector3(_ix / _in, 0, _iz / _in)
+    : new THREE.Vector3(center.x, 0, center.z);
   const spanX = Math.max(220, size.x);
   const spanZ = Math.max(220, size.z);
   const footprintRadius = Math.sqrt((spanX * 0.5) * (spanX * 0.5) + (spanZ * 0.5) * (spanZ * 0.5));
@@ -1791,8 +2374,89 @@ export function fitCameraToAll(durationMs = 1500) {
   dir.y = Math.max(0.62, Math.abs(dir.y));
   dir.normalize();
 
-  const dest = focusCenter.clone().addScaledVector(dir, fitDistance);
-  dest.y = Math.max(dest.y, (footprintRadius * GLOBAL_VIEW_ALTITUDE_BIAS) + GLOBAL_VIEW_ALTITUDE_OFFSET);
+  // ─────────────────────────────────────────────────────────
+  // AUTHORITATIVE ORBIT RADIUS — computed from REAL island geometry.
+  // The orbit MUST be outside the ring formed by the islands, so we ignore
+  // fitDistance (polluted by the 2000x2000 floor plane) for the horizontal
+  // placement and use the true reach from focusCenter to the farthest island
+  // edge. Multiplier 2.2 keeps a comfortable margin.
+  // ─────────────────────────────────────────────────────────
+  let islandRingRadius = 0;
+  const _metaKeys = Object.keys(islandMeta);
+  for (let i = 0; i < _metaKeys.length; i++) {
+    const m = islandMeta[_metaKeys[i]];
+    if (!m || !m.center) continue;
+    const ddx = m.center.x - focusCenter.x;
+    const ddz = m.center.z - focusCenter.z;
+    const reach = Math.hypot(ddx, ddz) + (m.radius || 800);
+    if (reach > islandRingRadius) islandRingRadius = reach;
+  }
+  // Also fold in real mesh extents in case islandMeta.radius understates them.
+  for (let i = 0; i < meshes.length; i++) {
+    const ud = meshes[i].userData;
+    const node = ud && ud.node;
+    if (!node) continue;
+    const ddx = node.x - focusCenter.x;
+    const ddz = node.z - focusCenter.z;
+    const reach = Math.hypot(ddx, ddz) + 60; // building half-width pad
+    if (reach > islandRingRadius) islandRingRadius = reach;
+  }
+  if (islandRingRadius < 200) islandRingRadius = Math.max(footprintRadius, 600);
+
+  const ORBIT_MULTIPLIER = 1.3;             // closer wrap (was 2.2 → too far)
+  const ORBIT_R = islandRingRadius * ORBIT_MULTIPLIER;
+  const ORBIT_ALT = ORBIT_R * 0.5;          // less zenithal altitude
+  console.log('[GlobalView] islandRingRadius=', islandRingRadius.toFixed(0),
+              ' orbit=', ORBIT_R.toFixed(0), ' alt=', ORBIT_ALT.toFixed(0),
+              ' islands=', _metaKeys.length);
+
+  // CRITICAL #1: OrbitControls.maxDistance clamps the camera back inside the
+  // ring when too low. Bump it dynamically. BEFORE bumping, snapshot the
+  // user's original control settings so we can restore them on interrupt or
+  // completion (otherwise the user keeps the huge maxDistance and the fast
+  // autoRotate forever after Global View ends).
+  if (controls && !_preGlobalViewControlsState) {
+    _preGlobalViewControlsState = {
+      autoRotate:      !!controls.autoRotate,
+      autoRotateSpeed: Number(controls.autoRotateSpeed) || 0.25,
+      maxDistance:     Number(controls.maxDistance) || 1400,
+      minDistance:     Number(controls.minDistance) || 40,
+      enableDamping:   !!controls.enableDamping,
+      dampingFactor:   Number(controls.dampingFactor) || 0.05,
+      zoomSpeed:       Number(controls.zoomSpeed) || 1.2,
+      enablePan:       !!controls.enablePan,
+    };
+  }
+  if (controls) {
+    controls.maxDistance = Math.max(controls.maxDistance || 0, ORBIT_R * 4);
+  }
+
+  // CRITICAL #2: prevent the "blackout after 10s" caused by DRS reverting
+  // camera.far / MAX_RENDER_DISTANCE to their boot-time baselines (which are
+  // smaller than the new orbit distance, clipping the entire scene).
+  // Diagonal from camera to far island = sqrt(ORBIT_R^2 + ORBIT_ALT^2 + ringR^2).
+  const farRequired = Math.sqrt(ORBIT_R * ORBIT_R + ORBIT_ALT * ORBIT_ALT) + islandRingRadius * 2 + 1000;
+  const newFar = Math.max(camera.far || 0, ORBIT_R * 5, farRequired);
+  camera.far = newFar;
+  camera.updateProjectionMatrix();
+  // Persist the bumped baselines so DRS's "reset to baseline" path doesn't
+  // shrink them back and black out the scene.
+  if (DRS) {
+    DRS.baseCameraFar = Math.max(DRS.baseCameraFar || 0, newFar);
+    DRS.baseRenderDistance = Math.max(DRS.baseRenderDistance || 0, newFar);
+  }
+  MAX_RENDER_DISTANCE = Math.max(MAX_RENDER_DISTANCE, newFar);
+
+  // Build dest: keep original elevation direction, but force horizontal
+  // distance to ORBIT_R and altitude to ORBIT_ALT relative to focusCenter.
+  const horizDir = new THREE.Vector2(dir.x, dir.z);
+  if (horizDir.lengthSq() < 1e-6) horizDir.set(1, 0);
+  horizDir.normalize();
+  const dest = new THREE.Vector3(
+    focusCenter.x + horizDir.x * ORBIT_R,
+    Math.max(ORBIT_ALT, GLOBAL_VIEW_ALTITUDE_OFFSET + 120),
+    focusCenter.z + horizDir.y * ORBIT_R
+  );
 
   const startPos = camera.position.clone();
   const flightVec = dest.clone().sub(startPos);
@@ -1810,6 +2474,7 @@ export function fitCameraToAll(durationMs = 1500) {
     cinematicPrevDRSEnabled = DRS.enabled;
   }
   cinematicFlightActive = true;
+  isGlobalViewActive = true; // user can still interrupt; controls 'start' will reset far
   isSystemAnimating = true;
   DRS.enabled = false;
   _suspendSectorCulling = true;
@@ -1850,7 +2515,7 @@ export function fitCameraToAll(durationMs = 1500) {
       
       // Force render during animation to ensure scene is visible
       controls.update();
-      if (composer && !is2DMode) {
+      if (composer) {
         composer.render();
       } else {
         renderer.render(scene, camera);
@@ -1884,7 +2549,7 @@ export function fitCameraToAll(durationMs = 1500) {
       if (camera) camera.updateProjectionMatrix();
       
       // Render immediately to ensure scene is visible
-      if (composer && !is2DMode) {
+      if (composer) {
         composer.render();
       } else {
         renderer.render(scene, camera);
@@ -1928,21 +2593,36 @@ function forceHighQualityFrame() {
   DRS.lastStepAt = performance.now();
   
   // Force one high-quality render
-  if (composer && !is2DMode) {
+  if (composer) {
     composer.render();
   } else {
     renderer.render(scene, camera);
   }
   
-  // Render CSS2D labels if present
-  if (labelRenderer) {
-    labelRenderer.render(scene, camera);
-  }
+  // CSS2D label render removed (volume labels migrated to Sprite pipeline).
   
   // Put engine to sleep
   needsUpdate = false;
   
   console.log('[CityEngine] forceHighQualityFrame: Quality restored to baseline, DRS disabled for 30s, engine sleeping.');
+}
+
+// Fast-travel camera to a node WITHOUT touching selection or blast state.
+// Used by the Blast Radius affected-nodes list so the analysis context is preserved.
+export function flyToNodeNoSelect(nodeId, durationMs = 1100) {
+  if (!nodeId) return;
+  const targetNode = nodeMap[nodeId];
+  if (!targetNode) return;
+  const targetMesh = nodeMeshMap[targetNode.id];
+  if (!targetMesh || !controls || !camera) return;
+  const ud = targetMesh.userData || {};
+  const buildingPos = new THREE.Vector3(ud.node.x, (ud.currentH || 40), ud.node.z);
+  const currentDir = camera.position.clone().sub(controls.target);
+  if (currentDir.lengthSq() < 1e-4) currentDir.set(0.4, 0.6, 0.7);
+  currentDir.normalize();
+  const destPos = buildingPos.clone().add(currentDir.multiplyScalar(180));
+  destPos.y = Math.max(destPos.y, buildingPos.y + 60);
+  tweenCamera(destPos, buildingPos.clone().add(new THREE.Vector3(0, 12, 0)), durationMs);
 }
 
 export function flyToNode(nodeNameOrId) {
@@ -1957,20 +2637,17 @@ export function flyToNode(nodeNameOrId) {
   if (!targetMesh || !controls || !camera) return;
 
   applySelection(targetNode);
-  const buildingPos = is2DMode
-    ? new THREE.Vector3(getDiagramNodeX(targetNode), 0, getDiagramNodeZ(targetNode))
-    : targetMesh.position.clone();
+  const ud = targetMesh.userData || {};
+  const buildingPos = new THREE.Vector3(ud.node.x, ud.currentH, ud.node.z);
 
-  if (is2DMode) {
-    controls.target.copy(buildingPos);
-    if (Visualizer.orthoCamera) {
-      Visualizer.orthoCamera.position.set(buildingPos.x, Math.max(1200, Visualizer.orthoCamera.position.y), buildingPos.z);
-      Visualizer.orthoCamera.lookAt(buildingPos.x, 0, buildingPos.z);
-      Visualizer.orthoCamera.updateProjectionMatrix();
-    }
-    controls.update();
-    return;
+  controls.target.copy(buildingPos);
+  if (Visualizer.orthoCamera) {
+    Visualizer.orthoCamera.position.set(buildingPos.x, Math.max(1200, Visualizer.orthoCamera.position.y), buildingPos.z);
+    Visualizer.orthoCamera.lookAt(buildingPos.x, 0, buildingPos.z);
+    Visualizer.orthoCamera.updateProjectionMatrix();
   }
+  controls.update();
+  return;
 
   const currentDir = camera.position.clone().sub(controls.target).normalize();
   const destPos = buildingPos.clone().add(currentDir.multiplyScalar(140));
@@ -2008,30 +2685,6 @@ function getCityCenterXZ() {
 }
 
 function getCityFitBoundsXZ() {
-  if (is2DMode) {
-    const allNodes = Object.values(nodeMap);
-    if (!allNodes.length) return { x: 0, z: 0, radius: 700 };
-    let minX = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let minZ = Number.POSITIVE_INFINITY;
-    let maxZ = Number.NEGATIVE_INFINITY;
-    for (let i = 0; i < allNodes.length; i++) {
-      const n = allNodes[i];
-      const x = getDiagramNodeX(n);
-      const z = getDiagramNodeZ(n);
-      minX = Math.min(minX, x - 48);
-      maxX = Math.max(maxX, x + 48);
-      minZ = Math.min(minZ, z - 42);
-      maxZ = Math.max(maxZ, z + 42);
-    }
-    const x = (minX + maxX) * 0.5;
-    const z = (minZ + maxZ) * 0.5;
-    const halfW = (maxX - minX) * 0.5;
-    const halfD = (maxZ - minZ) * 0.5;
-    const radius = Math.max(260, Math.sqrt((halfW * halfW) + (halfD * halfD)));
-    return { x, z, radius };
-  }
-
   const keys = Object.keys(islandMeta);
   if (!keys.length) return { x: 0, z: 0, radius: 700 };
 
@@ -2070,174 +2723,50 @@ function applySceneStyleForMode() {
   if (sceneBackground3D === null && scene.background) {
     sceneBackground3D = scene.background.clone ? scene.background.clone() : scene.background;
   }
-  if (is2DMode) {
-    // Neutral technical schematic background
-    scene.background = new THREE.Color(0x0a0f16);
-  } else if (sceneBackground3D) {
+  if (sceneBackground3D) {
     scene.background = sceneBackground3D.clone ? sceneBackground3D.clone() : sceneBackground3D;
   }
 
   scene.traverse((obj) => {
     if (!obj || !obj.isGridHelper || !obj.material) return;
-    obj.material.opacity = is2DMode ? 0.08 : 0.5;
+    obj.material.opacity = 0.5;
     obj.material.transparent = true;
     obj.visible = true;
     if (obj.material.color && obj.material.color.setHex) {
-      obj.material.color.setHex(is2DMode ? 0x1a2a3a : 0x003366);
+      obj.material.color.setHex(0x003366);
     }
   });
-  
-  // Update clusters when entering 2D mode
-  if (is2DMode) {
-    updateClusters();
-  }
 }
 
 function applyDiagramVisibilityForMode() {
   for (let i = 0; i < meshes.length; i++) {
     const m = meshes[i];
-    const ud = m.userData || {};
-    if (ud.diagramSprite) ud.diagramSprite.visible = is2DMode;
-    if (is2DMode) {
-      m.visible = false;
-      if (ud.voxel) ud.voxel.visible = false;
-      if (ud.label) ud.label.visible = false;
-      if (ud.timeLabel) ud.timeLabel.visible = false;
-      if (ud.volumeLabel) ud.volumeLabel.visible = false;
-      if (ud.volumeDiv) ud.volumeDiv.style.opacity = '0';
-    }
+    m.visible = true;
   }
 
+  const isLow = State.graphicsMode === 'low';
   for (let i = 0; i < edgeObjs.length; i++) {
     const e = edgeObjs[i];
-    if (e.line) e.line.visible = !is2DMode;
-    if (e.arrow) e.arrow.visible = !is2DMode;
+    if (e.line) e.line.visible = true;
+    // Particles: all visible in HIGH, half visible in LOW (matches setGraphicsQuality)
     if (Array.isArray(e.particles)) {
-      for (let j = 0; j < e.particles.length; j++) e.particles[j].visible = !is2DMode;
+      for (let j = 0; j < e.particles.length; j++) {
+        e.particles[j].visible = isLow ? (j % 2 === 0) : true;
+      }
     }
-    if (e.diagramLine) e.diagramLine.visible = is2DMode;
-    if (e.diagramArrow) e.diagramArrow.visible = is2DMode;
   }
 
   for (let i = 0; i < islandLabels.length; i++) {
-    islandLabels[i].visible = !is2DMode;
+    islandLabels[i].visible = true;
   }
-}
-
-export function setViewMode2D(next2D) {
-  const next = !!next2D;
-  if (is2DMode === next) return;
-  
-  const wasIn2D = is2DMode;
-  is2DMode = next;
-  State.set('viewMode', is2DMode ? '2d' : '3d');
-  
-  const setCamMode = (typeof Visualizer.setCameraMode === 'function') ? Visualizer.setCameraMode : null;
-  const orthoCam = Visualizer.orthoCamera || null;
-  const canUseTrueOrtho = !!(setCamMode && orthoCam);
-
-  if (next) {
-    // Entering 2D schematic mode
-    if (!schematicOverlay) {
-      initSchematicOverlay();
-    }
-    computeSchematicClusters();
-    renderSchematic();
-    schematicVisible = true;
-    if (schematicOverlay) {
-      schematicOverlay.style.display = 'block';
-      schematicOverlay.style.opacity = '1';
-      schematicOverlay.style.pointerEvents = 'auto';
-      schematicCanvas.style.pointerEvents = 'auto';
-    }
-    // Disable 3D controls in 2D mode
-    if (controls) {
-      controls.enableRotate = false;
-      controls.enablePan = false;
-      controls.enableZoom = false;
-      controls.update();
-    }
-  } else {
-    // Entering 3D mode
-    schematicVisible = false;
-    // Completely remove overlay from DOM in 3D mode to ensure no event blocking
-    if (schematicOverlay && schematicOverlay.parentElement) {
-      schematicOverlay.parentElement.removeChild(schematicOverlay);
-      schematicOverlay = null;
-      schematicCanvas = null;
-    }
-    
-    // Always enable 3D controls when entering 3D mode
-    const fit = getCityFitBoundsXZ();
-    if (canUseTrueOrtho) setCamMode(false);
-    if (controls) {
-      controls.enableRotate = true;
-      controls.enablePan = true;
-      controls.enableZoom = true;
-      controls.autoRotate = false;
-      controls.minZoom = 0;
-      controls.maxZoom = Infinity;
-      controls.minDistance = 40;
-      controls.maxDistance = 1400;
-      controls.update();
-    }
-    if (bloomPass) bloomPass.enabled = true;
-  }
-
-  applySceneStyleForMode();
-  applyDiagramVisibilityForMode();
-
-  if (viewModeToggleBtn) {
-    viewModeToggleBtn.classList.toggle('active', is2DMode);
-  }
-  if (viewMode3DBtn) {
-    viewMode3DBtn.classList.toggle('active', !is2DMode);
-  }
-  applySelection(State.selectedNode || null);
-  _cullDirty = true;
 }
 
 function ensureViewModeToggle() {
-  if (typeof document === 'undefined') return;
-
-  const btn2d = document.getElementById('view-mode-2d');
-  const btn3d = document.getElementById('view-mode-3d');
-  if (!btn2d || !btn3d) return;
-
-  viewModeToggleBtn = btn2d;
-  viewMode3DBtn = btn3d;
-
-  if (!btn2d.dataset.modeBound) {
-    btn2d.addEventListener('click', () => setViewMode2D(true));
-    btn2d.dataset.modeBound = '1';
-  }
-  if (!btn3d.dataset.modeBound) {
-    btn3d.addEventListener('click', () => setViewMode2D(false));
-    btn3d.dataset.modeBound = '1';
-  }
-
-  btn2d.classList.toggle('active', is2DMode);
-  btn3d.classList.toggle('active', !is2DMode);
+  // 2D mode removed - no longer needed
 }
 
 function ensureViewModeHotkey() {
-  if (viewModeHotkeyBound) return;
-  if (typeof window === 'undefined') return;
-
-  window.addEventListener('keydown', (ev) => {
-    if (ev.defaultPrevented || ev.repeat) return;
-    if ((ev.key || '').toLowerCase() !== 'v') return;
-
-    const target = ev.target;
-    const tag = target && target.tagName ? String(target.tagName).toLowerCase() : '';
-    const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (target && target.isContentEditable);
-    if (typing) return;
-
-    ev.preventDefault();
-    setViewMode2D(!is2DMode);
-  });
-
-  viewModeHotkeyBound = true;
+  // 2D mode removed - no longer needed
 }
 
 function ensureGlobalViewButton() {
@@ -2248,8 +2777,8 @@ function ensureGlobalViewButton() {
     btn = document.createElement('button');
     btn.id = 'btn-global-view';
     btn.type = 'button';
-    btn.title = 'Vista Global';
-    btn.setAttribute('aria-label', 'Vista Global');
+    btn.title = 'Global View (M) — orbit camera around the city';
+    btn.setAttribute('aria-label', 'Global View (press M)');
     btn.innerHTML = '<span aria-hidden="true">🌎</span>';
     btn.style.cssText = [
       'position: fixed',
@@ -2277,6 +2806,46 @@ function ensureGlobalViewButton() {
   globalViewBtn = btn;
   if (!btn.dataset.globalBound) {
     btn.addEventListener('click', () => triggerGlobalView(GLOBAL_VIEW_FLIGHT_MS));
+
+    // Force-bind the M hotkey here too so it's available BEFORE the user has
+    // ever opened the Pipeline View modal (initTacticalMap was the previous
+    // — and only — caller, which meant M was inert until then).
+    bindGlobalViewHotkey();
+
+    // Floating "Press M" hint bubble shown on hover.
+    const hint = document.createElement('div');
+    hint.id = 'global-view-hint';
+    hint.textContent = 'Press M';
+    hint.style.cssText = [
+      'position: fixed',
+      'top: 28px',
+      'right: 70px',
+      'z-index: 261',
+      'padding: 6px 12px',
+      'border-radius: 999px',
+      'background: rgba(6,14,24,0.92)',
+      'border: 1px solid rgba(0,243,255,0.55)',
+      'color: #00f3ff',
+      'font-family: "JetBrains Mono", monospace',
+      'font-size: 11px',
+      'font-weight: 700',
+      'letter-spacing: 1.6px',
+      'box-shadow: 0 0 12px rgba(0,243,255,0.35)',
+      'pointer-events: none',
+      'opacity: 0',
+      'transform: translateX(8px)',
+      'transition: opacity 0.18s, transform 0.18s'
+    ].join(';');
+    document.body.appendChild(hint);
+    btn.addEventListener('mouseenter', () => {
+      hint.style.opacity = '1';
+      hint.style.transform = 'translateX(0)';
+    });
+    btn.addEventListener('mouseleave', () => {
+      hint.style.opacity = '0';
+      hint.style.transform = 'translateX(8px)';
+    });
+
     btn.dataset.globalBound = '1';
   }
 }
@@ -2289,30 +2858,26 @@ function ensureRadarHUD() {
   if (!radarContainer) {
     radarContainer = document.createElement('div');
     radarContainer.id = 'city-radar-hud';
+    // Circular neon-rimmed minimap. NO title, NO inner grid lines.
     radarContainer.style.cssText = [
       'position: fixed',
-      'right: 24px',
+      'right: 220px',
       'bottom: 24px',
-      'width: 228px',
-      'height: 256px',
-      'padding: 12px 12px 10px 12px',
-      'border-radius: 18px',
-      'background: linear-gradient(160deg, rgba(10,18,28,0.62), rgba(5,10,16,0.42))',
-      'backdrop-filter: blur(8px)',
-      '-webkit-backdrop-filter: blur(8px)',
-      'border: 1px solid rgba(180,225,255,0.22)',
-      'box-shadow: 0 10px 30px rgba(0,0,0,0.38), inset 0 0 0 1px rgba(255,255,255,0.05)',
-      'z-index: 220',
+      'width: 220px',
+      'height: 220px',
+      'border-radius: 50%',
+      'background: radial-gradient(circle at 35% 35%, rgba(17,34,52,0.7), rgba(8,16,26,0.92))',
+      'border: 2px solid rgba(0, 243, 255, 0.7)',
+      'box-shadow: 0 0 22px rgba(0, 243, 255, 0.45), inset 0 0 30px rgba(255, 0, 255, 0.08)',
+      'backdrop-filter: blur(4px)',
+      '-webkit-backdrop-filter: blur(4px)',
+      'overflow: hidden',
+      'z-index: 50',
       'pointer-events: auto',
       'user-select: none',
       'font-family: "Courier New", monospace',
       'color: #dff4ff'
     ].join(';');
-
-    const title = document.createElement('div');
-    title.textContent = 'TACTICAL RADAR';
-    title.style.cssText = 'font-size: 11px; letter-spacing: 1px; opacity: 0.9; margin: 0 0 8px 2px;';
-    radarContainer.appendChild(title);
 
     document.body.appendChild(radarContainer);
   }
@@ -2324,38 +2889,81 @@ function ensureRadarHUD() {
     radarCanvas.width = RADAR_SIZE;
     radarCanvas.height = RADAR_SIZE;
     radarCanvas.style.cssText = [
-      'width: 200px',
-      'height: 200px',
+      'width: 100%',
+      'height: 100%',
       'display: block',
-      'border-radius: 12px',
-      'border: 1px solid rgba(180,225,255,0.22)',
-      'background: radial-gradient(circle at 35% 35%, rgba(17,34,52,0.95), rgba(8,16,26,0.95))',
+      'border-radius: 50%',
+      'background: transparent',
       'cursor: pointer'
     ].join(';');
     radarContainer.appendChild(radarCanvas);
   }
 
+  // Build the legend (bottom-left, English)
+  if (!document.getElementById('city-radar-legend')) {
+    const legend = document.createElement('div');
+    legend.id = 'city-radar-legend';
+    legend.style.cssText = [
+      'position: fixed',
+      'right: 460px',
+      'bottom: 28px',
+      'display: flex',
+      'flex-direction: column',
+      'gap: 6px',
+      'font-family: "Courier New", monospace',
+      'font-size: 10px',
+      'letter-spacing: 1.2px',
+      'color: rgba(220,240,255,0.85)',
+      'pointer-events: none',
+      'z-index: 51',
+      'text-shadow: 0 0 6px rgba(0,0,0,0.8)'
+    ].join(';');
+    const item = (color, label) => `
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="width:9px;height:9px;border-radius:50%;background:${color};box-shadow:0 0 8px ${color};"></span>
+        <span>${label}</span>
+      </div>`;
+    legend.innerHTML =
+      item('rgba(0, 243, 255, 0.95)', 'Active Islands') +
+      item('rgba(255, 68, 48, 0.95)', 'Alert Islands') +
+      item('rgba(255, 255, 255, 0.95)', 'Current Position');
+    document.body.appendChild(legend);
+  }
+
   radarCtx = radarCanvas.getContext('2d');
   if (!radarCtx) return;
 
+  // Click handler — uses the SAME camera-relative mapping as drawRadar so the
+  // dot under the cursor matches the island that gets flown to (no key drift).
   radarCanvas.addEventListener('click', (ev) => {
     const keys = Object.keys(islandMeta);
-    if (!keys.length || !radarCanvas) return;
+    if (!keys.length || !radarCanvas || !camera || !controls) return;
 
     const rect = radarCanvas.getBoundingClientRect();
     const x = ((ev.clientX - rect.left) / rect.width) * RADAR_SIZE;
     const y = ((ev.clientY - rect.top) / rect.height) * RADAR_SIZE;
 
-    const worldRadius = getRadarWorldRadius(keys);
+    const cx = RADAR_SIZE / 2;
+    const cy = RADAR_SIZE / 2;
+    const ringR = cx - RADAR_PADDING;
+    const camX = controls.target.x || camera.position.x;
+    const camZ = controls.target.z || camera.position.z;
+    const scale = ringR / RADAR_VIEW_RADIUS;
+
     let targetKey = null;
     let bestD2 = Number.POSITIVE_INFINITY;
     for (let i = 0; i < keys.length; i++) {
       const k = keys[i];
       const meta = islandMeta[k];
       if (!meta) continue;
-      const p = radarWorldToCanvas(meta.center.x, meta.center.z, worldRadius);
-      const dx = x - p.x;
-      const dy = y - p.y;
+      const dxw = meta.center.x - camX;
+      const dzw = meta.center.z - camZ;
+      const distance = Math.sqrt(dxw * dxw + dzw * dzw);
+      if (distance > RADAR_VIEW_RADIUS) continue;
+      const px = cx + dxw * scale;
+      const py = cy + dzw * scale;
+      const dx = x - px;
+      const dy = y - py;
       const d2 = dx * dx + dy * dy;
       if (d2 < bestD2) {
         bestD2 = d2;
@@ -2364,6 +2972,7 @@ function ensureRadarHUD() {
     }
 
     if (targetKey && bestD2 <= RADAR_CLICK_RADIUS * RADAR_CLICK_RADIUS) {
+      console.log('[Radar] Click → flying to island:', targetKey);
       flyToIslandCenter(targetKey);
     }
   });
@@ -2390,47 +2999,82 @@ function radarWorldToCanvas(wx, wz, worldRadius) {
 }
 
 function drawRadar(now) {
-  if (!radarCtx || !radarCanvas || !camera) return;
-  const keys = Object.keys(islandMeta);
+  if (!radarCtx || !radarCanvas || !camera || !controls) return;
+  const keys = Object.keys(islandCenters);
 
   radarCtx.clearRect(0, 0, RADAR_SIZE, RADAR_SIZE);
 
   const cx = RADAR_SIZE / 2;
   const cy = RADAR_SIZE / 2;
   const ringR = cx - RADAR_PADDING;
-  radarCtx.strokeStyle = 'rgba(120,180,220,0.28)';
-  radarCtx.lineWidth = 1;
-  radarCtx.beginPath();
-  radarCtx.arc(cx, cy, ringR, 0, Math.PI * 2);
-  radarCtx.stroke();
-  radarCtx.beginPath();
-  radarCtx.arc(cx, cy, ringR * 0.62, 0, Math.PI * 2);
-  radarCtx.stroke();
 
+  // No grid lines, no concentric circles — just clean dark transparency.
   if (!keys.length) return;
 
-  const worldRadius = getRadarWorldRadius(keys);
-  const blink = (Math.sin(now * 0.012) + 1) * 0.5;
+  // Get camera position as radar center
+  const camX = controls.target.x || camera.position.x;
+  const camZ = controls.target.z || camera.position.z;
 
+  // Draw only nearby islands within radar view radius
+  const blink = (Math.sin(now * 0.012) + 1) * 0.5;
+  
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
-    const meta = islandMeta[key];
-    if (!meta) continue;
+    const center = islandCenters[key];
+    if (!center) continue;
 
-    const p = radarWorldToCanvas(meta.center.x, meta.center.z, worldRadius);
+    // Calculate distance from camera to island
+    const dx = center.x - camX;
+    const dz = center.z - camZ;
+    const distance = Math.sqrt(dx * dx + dz * dz);
+
+    // Only draw if within radar view radius
+    if (distance > RADAR_VIEW_RADIUS) continue;
+
+    // Map relative position to radar canvas
+    const usable = ringR;
+    const scale = usable / RADAR_VIEW_RADIUS;
+    const p = {
+      x: cx + (dx * scale),
+      y: cy + (dz * scale)
+    };
+
     const isBurning = !!islandFireState[key];
     const group = islandGroups[key];
     const visible = !group || group.visible !== false;
 
+    // Vibrant neon dots: red for burning, cyan for active, dim grey for hidden
+    const dotColor = isBurning
+      ? `rgba(255, 68, 48, ${0.65 + blink * 0.35})`
+      : (visible ? 'rgba(0, 243, 255, 0.95)' : 'rgba(105, 130, 150, 0.4)');
+    radarCtx.save();
+    radarCtx.shadowColor = dotColor;
+    radarCtx.shadowBlur = isBurning ? 14 : 10;
+    radarCtx.fillStyle = dotColor;
     radarCtx.beginPath();
-    radarCtx.fillStyle = isBurning
-      ? `rgba(255, 68, 48, ${0.55 + blink * 0.45})`
-      : (visible ? 'rgba(140, 200, 240, 0.90)' : 'rgba(105, 130, 150, 0.45)');
     radarCtx.arc(p.x, p.y, isBurning ? 5.4 : 4.2, 0, Math.PI * 2);
     radarCtx.fill();
+    radarCtx.restore();
+
+    if (visible && distance < RADAR_VIEW_RADIUS * 0.7) {
+      radarCtx.fillStyle = 'rgba(220, 240, 255, 0.85)';
+      radarCtx.font = '10px "Courier New", monospace';
+      radarCtx.textAlign = 'center';
+      radarCtx.fillText(key.toUpperCase(), p.x, p.y - 9);
+    }
   }
 
-  const camP = radarWorldToCanvas(camera.position.x, camera.position.z, worldRadius);
+  // Camera position (white core with neon halo)
+  radarCtx.save();
+  radarCtx.shadowColor = 'rgba(255, 0, 255, 0.9)';
+  radarCtx.shadowBlur = 12;
+  radarCtx.fillStyle = 'rgba(255, 255, 255, 0.98)';
+  radarCtx.beginPath();
+  radarCtx.arc(cx, cy, 3.6, 0, Math.PI * 2);
+  radarCtx.fill();
+  radarCtx.restore();
+  
+  // Draw camera direction
   const camDir = _tmpVec3b;
   camera.getWorldDirection(camDir);
   camDir.y = 0;
@@ -2443,15 +3087,10 @@ function drawRadar(now) {
 
   radarCtx.fillStyle = 'rgba(255,245,170,0.18)';
   radarCtx.beginPath();
-  radarCtx.moveTo(camP.x, camP.y);
-  radarCtx.lineTo(camP.x + Math.cos(angle - spread) * coneLen, camP.y + Math.sin(angle - spread) * coneLen);
-  radarCtx.lineTo(camP.x + Math.cos(angle + spread) * coneLen, camP.y + Math.sin(angle + spread) * coneLen);
+  radarCtx.moveTo(cx, cy);
+  radarCtx.lineTo(cx + Math.cos(angle - spread) * coneLen, cy + Math.sin(angle - spread) * coneLen);
+  radarCtx.lineTo(cx + Math.cos(angle + spread) * coneLen, cy + Math.sin(angle + spread) * coneLen);
   radarCtx.closePath();
-  radarCtx.fill();
-
-  radarCtx.fillStyle = 'rgba(255,255,255,0.95)';
-  radarCtx.beginPath();
-  radarCtx.arc(camP.x, camP.y, 3.2, 0, Math.PI * 2);
   radarCtx.fill();
 }
 
@@ -2462,9 +3101,179 @@ export function updateSyncMetrics() {
   syncComplete = false;
 }
 
+// ─────────────────────────────────────────────────────────
+// SINGLE SOURCE OF TRUTH for graphics quality.
+//
+// HARD RULE — DO NOT VIOLATE:
+//   • NEVER swap, replace or rebuild node materials based on this slider.
+//   • NEVER mutate `.color`, `.emissive`, or `.emissiveIntensity` here.
+//   • The buildings keep their original MeshStandardMaterial in BOTH modes,
+//     so they look IDENTICAL — just with cheaper post-processing in LOW.
+//
+// This function only touches the rendering PIPELINE:
+//   1) Renderer shadowMap + pixelRatio
+//   2) Bloom post-processing pass
+//   3) Particle visibility/speed (visibility flag, not materials)
+//   4) Persist + sync UI
+// ─────────────────────────────────────────────────────────
+export function setGraphicsQuality(level) {
+  const isHigh = (level === 1 || level === '1');
+  const isLow = !isHigh;
+  console.log('[CityEngine] setGraphicsQuality:', isHigh ? 'HIGH' : 'LOW');
+
+  // 1. Renderer pipeline only — no material touching.
+  if (renderer) {
+    renderer.shadowMap.enabled = isHigh;
+    renderer.setPixelRatio(isHigh ? Math.min(window.devicePixelRatio || 1, 2) : 1);
+  }
+
+  // 2. Post-processing: bloom on in HIGH, off in LOW.
+  if (bloomPass) bloomPass.enabled = isHigh;
+
+  // 3. Cheap shadow flags on existing meshes (does NOT alter their materials).
+  meshes.forEach(mesh => {
+    mesh.castShadow = isHigh;
+    mesh.receiveShadow = isHigh;
+  });
+
+  // 4. Edges: particles half-count + 3× speed in LOW. Visibility/speed only,
+  //    no material/color changes.
+  const SPEED_MULT_LOW = 3.0;
+  edgeObjs.forEach(e => {
+    if (Array.isArray(e.arrows)) e.arrows.forEach(arrow => { arrow.visible = false; });
+    if (Array.isArray(e.particles)) {
+      e.particles.forEach((p, idx) => {
+        const ud = p.userData;
+        if (isLow) {
+          p.visible = (idx % 2 === 0);
+          if (ud.baseSpeed) ud.speed = ud.baseSpeed * SPEED_MULT_LOW;
+        } else {
+          p.visible = true;
+          if (ud.baseSpeed) ud.speed = ud.baseSpeed;
+        }
+      });
+    }
+  });
+
+  // 5. Persist (single source of truth) + sync legacy State key.
+  try { localStorage.setItem('dagcity_graphics', isHigh ? '1' : '0'); } catch (_) {}
+  State.graphicsMode = isHigh ? 'high' : 'low';
+
+  // 6. Sync slider DOM idempotently.
+  const slider = document.getElementById('graphics-slider');
+  if (slider) slider.value = isHigh ? '1' : '0';
+
+  needsUpdate = true;
+}
+
+// ── Apply Settings to 3D Engine ───────────────────────────
+// Legacy bridge: routes all graphics changes through setGraphicsQuality.
+window.applySettingsToEngine = function(settings) {
+  console.log('[CityEngine] applySettingsToEngine called with:', settings);
+
+  if (settings.graphicsMode !== undefined) {
+    setGraphicsQuality(settings.graphicsMode === 'low' ? 0 : 1);
+  }
+
+  // showLabels: toggle CSS2D visibility (in low mode, hide by default)
+  if (settings.showLabels !== undefined) {
+    const isLow = State.graphicsMode === 'low';
+    const shouldShow = settings.showLabels && !isLow;
+    meshes.forEach(mesh => {
+      if (mesh.userData.label) mesh.userData.label.visible = shouldShow;
+      if (mesh.userData.timeLabel) mesh.userData.timeLabel.visible = shouldShow;
+    });
+  }
+
+  // showParticles: toggle particle systems (always off in low mode)
+  if (settings.showParticles !== undefined) {
+    const isLow = State.graphicsMode === 'low';
+    const shouldShow = settings.showParticles && !isLow;
+    edgeObjs.forEach(edge => {
+      if (Array.isArray(edge.particles)) {
+        edge.particles.forEach(p => p.visible = shouldShow);
+      }
+    });
+  }
+
+  // neonIntensity: update material emissive (only in high mode)
+  if (settings.neonIntensity !== undefined) {
+    if (State.graphicsMode === 'high') {
+      meshes.forEach(mesh => {
+        if (mesh.userData.baseEmis) {
+          const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+          if (mat.emissive) {
+            mat.emissiveIntensity = settings.neonIntensity;
+            mat.needsUpdate = true;
+          }
+        }
+      });
+    }
+  }
+
+  // perfMode and viewMode handled elsewhere (UIManager / setPerfModeEnabled).
+};
+
 export function rebuildCity(graphData, isLiveSync = false) {
   const nodes = graphData.nodes || [];
   const links = graphData.links || [];
+
+  // ─────────────────────────────────────────────────────────
+  // HONESTY PASS — sanitize execution_time at the data ingress chokepoint.
+  // Any node whose time_source is NOT 'real' or 'marketing' must have
+  // execution_time = 0. This kills stale/cached values from older builds
+  // (e.g. IndexedDB projects parsed when synthetic times were still injected)
+  // so the UI cannot display a number next to a "Time: N/A" badge.
+  // ─────────────────────────────────────────────────────────
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const src = n.time_source;
+    if (src !== 'real' && src !== 'marketing') {
+      n.execution_time = 0;
+      if (!src) n.time_source = 'none';
+    }
+  }
+
+  // Notify UI so the LIVE SYNC / OFFLINE indicator follows the active project.
+  // Sources: 'live_sync', 'local_sync' → live; anything else → offline.
+  try {
+    const src = graphData.metadata?.source
+      || (isLiveSync ? 'live_sync' : 'offline');
+    window.dispatchEvent(new CustomEvent('dagcity:sync-source', { detail: { source: src } }));
+
+    // Also broadcast whether this project actually has real execution_time data
+    // so the UI can disable the "Execution Time" metric option when not.
+    const hasRealTimes = !!(graphData.metadata?.has_real_times)
+      || nodes.some(n => Number(n.execution_time) > 0 && n.time_source === 'real');
+    window.dispatchEvent(new CustomEvent('dagcity:metrics-availability', {
+      detail: { hasRealTimes }
+    }));
+  } catch (_) {}
+
+  // Extract project name from metadata for settings persistence
+  const projectName = graphData.metadata?.project_name || graphData.metadata?.name || 'default';
+  if (State.setProjectName) {
+    State.setProjectName(projectName);
+    // setProjectName reloaded project-specific settings (perfMode, graphicsMode,
+    // showLabels, etc.) but the HUD controls still show boot-time values. Re-sync.
+    const perfCheck = document.getElementById('check-perf-mode');
+    if (perfCheck) perfCheck.checked = !!State.perfMode;
+    // CRITICAL: read directly from `dagcity_graphics` (single source of truth).
+    // Previously this read from State.graphicsMode, but State is per-project and
+    // gets reset to its default 'high' on every project load — overriding the
+    // user's actual choice and causing the slider to "snap back" to High after
+    // a reload. localStorage 'dagcity_graphics' is global and authoritative.
+    let savedGraphics = '1';
+    try { savedGraphics = localStorage.getItem('dagcity_graphics') || '1'; } catch (_) {}
+    const graphicsSlider = document.getElementById('graphics-slider');
+    if (graphicsSlider) graphicsSlider.value = savedGraphics;
+    setGraphicsQuality(savedGraphics);
+  }
+
+  // Debug: Log island groups from parsed data
+  const uniqueGroups = [...new Set(nodes.map(n => n.group || 'default'))];
+  console.log('[CityEngine] Island groups from parsed data:', uniqueGroups);
+  console.log('[CityEngine] Sample node groups:', nodes.slice(0, 5).map(n => ({ name: n.name, group: n.group, resource_type: n.resource_type })));
 
   const overlay = document.getElementById('awaiting-overlay');
   if (nodes.length > 0 && overlay && overlay.style.display !== 'none') {
@@ -2483,7 +3292,7 @@ export function rebuildCity(graphData, isLiveSync = false) {
         m.userData.node    = n;
         if (m.userData.timeLabel) {
           m.userData.timeLabel.material.map.dispose();
-          const s = makeTimeSprite(`${n.execution_time.toFixed(2)}s`, n.is_bottleneck);
+          const s = makeTimeSprite(formatTimeLabel(n), n.is_bottleneck);
           m.userData.timeLabel.material.map = s.material.map;
         }
       }
@@ -2529,12 +3338,14 @@ export function rebuildCity(graphData, isLiveSync = false) {
     if (e.line.parent) e.line.parent.remove(e.line);
     if (e.line.geometry) e.line.geometry.dispose();
     e.particles.forEach(p => { if (p.parent) p.parent.remove(p); if (p.geometry) p.geometry.dispose(); });
-    if (e.arrow) {
-      if (e.arrow.parent) e.arrow.parent.remove(e.arrow);
-      if (e.arrow.line?.geometry) e.arrow.line.geometry.dispose();
-      if (e.arrow.line?.material) e.arrow.line.material.dispose();
-      if (e.arrow.cone?.geometry) e.arrow.cone.geometry.dispose();
-      if (e.arrow.cone?.material) e.arrow.cone.material.dispose();
+    if (e.arrows && Array.isArray(e.arrows)) {
+      e.arrows.forEach(arrow => {
+        if (arrow.parent) arrow.parent.remove(arrow);
+        if (arrow.line?.geometry) arrow.line.geometry.dispose();
+        if (arrow.line?.material) arrow.line.material.dispose();
+        if (arrow.cone?.geometry) arrow.cone.geometry.dispose();
+        if (arrow.cone?.material) arrow.cone.material.dispose();
+      });
     }
     if (e.diagramLine) {
       if (e.diagramLine.parent) e.diagramLine.parent.remove(e.diagramLine);
@@ -2569,6 +3380,8 @@ export function rebuildCity(graphData, isLiveSync = false) {
   if (globalArcsGroup) {
     // Keep globalArcsGroup but ensure it's empty (children removed above via edgeObjs)
     while (globalArcsGroup.children.length) globalArcsGroup.remove(globalArcsGroup.children[0]);
+    // Ensure visibility is restored after any previous selection/cull state
+    globalArcsGroup.visible = true;
   }
   _cullDirty = true;
   
@@ -2605,24 +3418,46 @@ export function rebuildCity(graphData, isLiveSync = false) {
     };
   });
 
-  const lC = {}, lI = {};
-  nodes.forEach(n => { 
-    const p = n.group || 'default';
-    const l = n.layer||'default'; 
-    const key = p + '_' + l;
-    lC[key] = (lC[key]||0)+1; 
-    lI[key] = 0; 
-  });
-  nodes.forEach(n => {
-    const p = n.group || 'default';
-    const l = n.layer||'default';
-    const key = p + '_' + l;
+  // ── Sequential Grid-Wrap Layout ───────────────────────
+  // All numeric values come from LAYOUT_CONFIG (top of file). Edit there.
+  const { nodeSpacingX, nodeSpacingZ, maxPerRow, groupSpacing } = LAYOUT_CONFIG;
+  const LAYER_ORDER = ['source', 'staging', 'intermediate', 'mart', 'consumption', 'default'];
+
+  projects.forEach(p => {
     const center = projectCenters[p];
-    n.x = (LAYER_X[l] ?? 0) + center.dx;
-    n.z = (lI[key] - (lC[key]-1)/2) * 70 + center.dz;
-    n.y = 0; 
-    lI[key]++;
-    nodeMap[n.id] = n;
+
+    // Bucket this project's nodes by layer
+    const byLayer = {};
+    nodes.forEach(n => {
+      if ((n.group || 'default') !== p) return;
+      const l = n.layer || 'default';
+      (byLayer[l] = byLayer[l] || []).push(n);
+    });
+
+    // Order layers by canonical flow (source → mart → ...)
+    const layerKeys = Object.keys(byLayer).sort((a, b) => {
+      const ia = LAYER_ORDER.indexOf(a); const ib = LAYER_ORDER.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+
+    // Place each layer block sequentially in X, gap-protected
+    let cursorX = center.dx;
+    layerKeys.forEach(l => {
+      const arr = byLayer[l];
+      const count = arr.length;
+      const cols = Math.min(count, maxPerRow);
+      const rows = Math.ceil(count / maxPerRow);
+      arr.forEach((n, i) => {
+        const col = i % maxPerRow;
+        const row = Math.floor(i / maxPerRow);
+        n.x = cursorX + row * nodeSpacingX;
+        n.z = (col - (cols - 1) / 2) * nodeSpacingZ + center.dz;
+        n.y = 0;
+        nodeMap[n.id] = n;
+      });
+      const blockWidthX = Math.max(0, rows - 1) * nodeSpacingX;
+      cursorX += blockWidthX + groupSpacing;
+    });
   });
 
   computeDiagramLayout(nodes);
@@ -2641,6 +3476,9 @@ export function rebuildCity(graphData, isLiveSync = false) {
     // +200 padding for building height/extent and safety
     meta.radius = Math.max(400, Math.sqrt(maxDistSq) + 200);
   });
+
+  // Calculate island centers for navigation system
+  calculateIslandCenters();
 
   State.set('raw', graphData);
 
@@ -2798,13 +3636,138 @@ function tickDRS(now) {
   );
 }
 
+// ── Animation Loop control ─────────────────────────────
+let _animationFrameId = null;
+let _loopRunning = false;
+
+export function pauseAnimationLoop() {
+  if (_animationFrameId !== null) {
+    cancelAnimationFrame(_animationFrameId);
+    _animationFrameId = null;
+  }
+  _loopRunning = false;
+}
+
+// ── Dispose: clean up scene, controls listeners, arrays ─
+export function disposeCity({ resetCamera = true } = {}) {
+  console.log('[CityEngine] disposeCity called');
+  pauseAnimationLoop();
+
+  // Dispose meshes
+  [...meshes].forEach(m => {
+    const diagramSprite = m.userData?.diagramSprite;
+    if (diagramSprite) {
+      if (diagramSprite.parent) diagramSprite.parent.remove(diagramSprite);
+      if (diagramSprite.material?.map) diagramSprite.material.map.dispose();
+      if (diagramSprite.material) diagramSprite.material.dispose();
+    }
+    if (m.parent) m.parent.remove(m);
+    if (m.geometry) m.geometry.dispose();
+    if (Array.isArray(m.material)) m.material.forEach(mt => mt && mt.dispose());
+    else if (m.material) m.material.dispose();
+  });
+  meshes.length = 0;
+  diagramNodeTargets.length = 0;
+
+  // Dispose voxels
+  voxels.forEach(v => {
+    if (v.parent) v.parent.remove(v);
+    if (v.geometry) v.geometry.dispose();
+    if (v.material) v.material.dispose();
+  });
+  voxels.length = 0;
+
+  // Dispose edges + arrows + diagram lines
+  edgeObjs.forEach(e => {
+    if (e.line) {
+      if (e.line.parent) e.line.parent.remove(e.line);
+      if (e.line.geometry) e.line.geometry.dispose();
+      if (e.line.material) e.line.material.dispose();
+    }
+    if (Array.isArray(e.particles)) {
+      e.particles.forEach(p => {
+        if (p.parent) p.parent.remove(p);
+        if (p.geometry) p.geometry.dispose();
+        if (p.material) p.material.dispose();
+      });
+    }
+    if (Array.isArray(e.arrows)) {
+      e.arrows.forEach(arrow => {
+        if (arrow.parent) arrow.parent.remove(arrow);
+        if (arrow.line?.geometry) arrow.line.geometry.dispose();
+        if (arrow.line?.material) arrow.line.material.dispose();
+        if (arrow.cone?.geometry) arrow.cone.geometry.dispose();
+        if (arrow.cone?.material) arrow.cone.material.dispose();
+      });
+    }
+    if (e.diagramLine) {
+      if (e.diagramLine.parent) e.diagramLine.parent.remove(e.diagramLine);
+      if (e.diagramLine.geometry) e.diagramLine.geometry.dispose();
+      if (e.diagramLine.material) e.diagramLine.material.dispose();
+    }
+    if (e.diagramArrow) {
+      if (e.diagramArrow.parent) e.diagramArrow.parent.remove(e.diagramArrow);
+      if (e.diagramArrow.line?.geometry) e.diagramArrow.line.geometry.dispose();
+      if (e.diagramArrow.line?.material) e.diagramArrow.line.material.dispose();
+      if (e.diagramArrow.cone?.geometry) e.diagramArrow.cone.geometry.dispose();
+      if (e.diagramArrow.cone?.material) e.diagramArrow.cone.material.dispose();
+    }
+  });
+  edgeObjs.length = 0;
+
+  // Island labels
+  islandLabels.forEach(l => {
+    if (l.parent) l.parent.remove(l);
+    if (l.material?.map) l.material.map.dispose();
+    if (l.material) l.material.dispose();
+  });
+  islandLabels.length = 0;
+
+  // Island groups
+  Object.keys(islandGroups).forEach(k => {
+    const g = islandGroups[k];
+    if (g && g.parent) g.parent.remove(g);
+    delete islandGroups[k];
+    delete islandMeta[k];
+    delete islandCenters[k];
+  });
+
+  // Global arcs group
+  if (globalArcsGroup) {
+    while (globalArcsGroup.children.length) {
+      const c = globalArcsGroup.children[0];
+      globalArcsGroup.remove(c);
+    }
+  }
+
+  // Reset internal data maps
+  Object.keys(nodeMap).forEach(k => delete nodeMap[k]);
+  Object.keys(nodeMeshMap).forEach(k => delete nodeMeshMap[k]);
+  selectedNode = null;
+  critSet = new Set();
+
+  // Reset camera/controls to default to avoid landing in dark void
+  if (resetCamera && camera && controls) {
+    camera.position.set(INIT_CAM.x, INIT_CAM.y, INIT_CAM.z);
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
+
+  console.log('[CityEngine] disposeCity complete');
+}
+
 // ── Animation Loop ─────────────────────────────────────
 export function startAnimationLoop() {
+  if (_loopRunning) {
+    console.log('[CityEngine] startAnimationLoop: already running, skipping');
+    return;
+  }
+  _loopRunning = true;
   ensureRadarHUD();
   ensureViewModeToggle();
   ensureGlobalViewButton();
   ensureViewModeHotkey();
-  setViewMode2D(State.viewMode === '2d');
+  ensureTacticalMapButton();
 
   // Add imposter group to scene for LOD billboard system
   if (!scene.getObjectByName('imposters')) {
@@ -2838,7 +3801,13 @@ export function startAnimationLoop() {
   }
 
   function animate() {
-    requestAnimationFrame(animate);
+    // Handle tactical map render pending (deferred rendering after DOM paint)
+  if (tacticalMapRenderPending && tacticalMapVisible) {
+    renderTacticalMap();
+    tacticalMapRenderPending = false;
+  }
+
+  _animationFrameId = requestAnimationFrame(animate);
 
     const dt  = clock.getDelta();
     const t   = clock.getElapsedTime();
@@ -2938,20 +3907,7 @@ export function startAnimationLoop() {
       const ud = m.userData;
       const n = ud.node;
 
-      if (is2DMode) {
-        m.visible = false;
-        if (ud.voxel) ud.voxel.visible = false;
-        if (ud.label) ud.label.visible = false;
-        if (ud.timeLabel) ud.timeLabel.visible = false;
-        if (ud.volumeLabel) ud.volumeLabel.visible = false;
-        if (ud.volumeDiv) ud.volumeDiv.style.opacity = '0';
-        if (ud.diagramSprite) {
-          ud.diagramSprite.visible = true;
-          ud.diagramSprite.position.set(getDiagramNodeX(n), 2.2, getDiagramNodeZ(n));
-          ud.diagramSprite.material.opacity = Math.max(0.14, Number(ud.diagramSprite.material.opacity) || 1);
-        }
-        return;
-      }
+      m.visible = true;
 
       const isGhost = n.is_dead_end;
       const isBottleneck = n.is_bottleneck;
@@ -2986,7 +3942,9 @@ export function startAnimationLoop() {
         if (m.material && Array.isArray(m.material)) {
           m.material.forEach(mat => {
             mat.emissiveIntensity = 0.05; // Minimal emissive
-            mat.emissive.setHex(0x000000);
+            if (mat.emissive && mat.emissive.setHex) {
+              mat.emissive.setHex(0x000000);
+            }
           });
         }
       }
@@ -3073,9 +4031,20 @@ export function startAnimationLoop() {
         m.material.forEach(mat => {
           if (State.perfMode) {
             mat.color.set(0x00f3ff); mat.opacity = 0.22; mat.metalness = 0.9; mat.roughness = 0.1;
-            if (isGhost) { const flash = (Math.sin(t*10)+1)/2; mat.emissive.set(0xff0000); mat.emissiveIntensity = 0.3 + flash*0.5; }
-            else if (isBottleneck) { const heat = 0.5+Math.sin(t*4)*0.45; mat.emissive.set(0xff3300); mat.emissiveIntensity = heat*1.5; }
-            else { mat.emissive.set(0x00f3ff); mat.emissiveIntensity = 0.2; }
+            if (isGhost) { 
+              const flash = (Math.sin(t*10)+1)/2; 
+              if (mat.emissive) mat.emissive.set(0xff0000); 
+              mat.emissiveIntensity = 0.3 + flash*0.5; 
+            }
+            else if (isBottleneck) { 
+              const heat = 0.5+Math.sin(t*4)*0.45; 
+              if (mat.emissive) mat.emissive.set(0xff3300); 
+              mat.emissiveIntensity = heat*1.5; 
+            }
+            else { 
+              if (mat.emissive) mat.emissive.set(0x00f3ff); 
+              mat.emissiveIntensity = 0.2; 
+            }
           } else {
             mat.color.set(n.color);
             mat.metalness = 0.6; mat.roughness = 0.45;
@@ -3102,7 +4071,9 @@ export function startAnimationLoop() {
 
             mat.opacity += (targetOpacity - mat.opacity) * 0.1;
             _tmpColor.set(targetEmissiveColor);
-            mat.emissive.lerp(_tmpColor, 0.1);
+            if (mat.emissive && mat.emissive.lerp) {
+              mat.emissive.lerp(_tmpColor, 0.1);
+            }
             mat.emissiveIntensity += (targetEmissiveIntensity - mat.emissiveIntensity) * 0.1;
             mat.depthWrite = (mat.opacity > 0.2);
           }
@@ -3162,62 +4133,66 @@ export function startAnimationLoop() {
         m.scale.z += (targetScaleZ - currentScaleZ) * lerpFactor;
       }
 
-      // ── Data Volume Labels Visibility ──────────────────
-      // Lazy-create CSS2DObject + DOM div the first time this mesh actually
-      // needs to display the volume label. Avoids 450+ DOM nodes at load.
-      if (State.dataVolumeMode && !ud.volumeLabel) {
-        const CSS2DObject = window.CSS2DObject || (THREE.CSS2DObject);
-        if (CSS2DObject) {
-          const volumeDiv = document.createElement('div');
-          volumeDiv.className = 'data-volume-label';
-          volumeDiv.textContent = formatSwellLabel(n, ud);
-          const sStyle = getSeverityStyle(swellSeverity.level);
-          volumeDiv.style.cssText = `background: rgba(0,0,0,0.7); color: ${sStyle.color}; padding: 6px 12px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 12px; font-weight: bold; border: 1px solid ${sStyle.borderColor}; box-shadow: ${sStyle.boxShadow}; pointer-events: none; opacity: 0; transition: opacity 0.3s; white-space: nowrap; text-shadow: ${sStyle.textShadow};`;
-          const volumeLabel = new CSS2DObject(volumeDiv);
-          volumeLabel.position.set(0, ud.baseH + 24, 0);
-          volumeLabel.name = 'volumeLabel';
-          m.add(volumeLabel);
-          ud.volumeLabel = volumeLabel;
-          ud.volumeDiv = volumeDiv;
-        }
-      }
-      if (ud.volumeLabel && ud.volumeDiv) {
+      // ── UNIFIED VOLUME LABEL (Sprite, mirrors timeLabel pipeline) ───────
+      // Same GPU-only path used by the name & time labels. No CSS2D, no DOM
+      // mutation in the render loop. Distance culling + frustum culling
+      // (via m.visible) + ease-in opacity, identical to timeLabel above.
+      const volumeLabel = ud.volumeLabel;
+      if (volumeLabel) {
+        // HARD GATE: volume labels only ever show when Data Volume mode is ON.
+        // No exceptions — selection, hover, etc. cannot bypass this.
+        if (!State.dataVolumeMode) {
+          if (volumeLabel.material.opacity !== 0) volumeLabel.material.opacity = 0;
+          if (volumeLabel.visible) volumeLabel.visible = false;
+          // skip all per-frame work for this label
+          // (continue to next per-mesh logic outside this block)
+        } else {
+        const dist = camera.position.distanceTo(m.position);
+        const isSelected = (State.selectedNode && State.selectedNode.id === n.id);
+        const inFocus = (!State.selectedNode || critSet.has(n.id));
         const labelsEnabled = !!State.showLabels;
         const ghostVisible = !labelsEnabled && !!ud.isHovered;
-        const shouldShowLabel = (State.dataVolumeMode && m.visible && sY > 0.1) && (labelsEnabled || ghostVisible);
 
-        const currentOpacity = Number(ud.volumeDiv.style.opacity || 0);
-        const targetOpacity = shouldShowLabel ? 1 : 0;
-        const nextOpacity = currentOpacity + (targetOpacity - currentOpacity) * 0.25;
-        ud.volumeDiv.style.opacity = String(Math.max(0, Math.min(1, nextOpacity)));
-        ud.volumeLabel.visible = m.visible && sY > 0.1 && nextOpacity > 0.03;
+        // OPTIMIZATION: same threshold as timeLabel (1000) → identical FPS profile.
+        const volumeLabelLODThreshold = 1000;
+        const shouldShow = labelsEnabled
+          ? (m.visible && sY > 0.1 && (dist < volumeLabelLODThreshold || isSelected))
+          : (ghostVisible && m.visible && sY > 0.1);
 
-        const currentMetric = State.dataSwellMetric || 'execution_time';
-        const severityNow = swellSeverity;
-        const severityChanged = ud.lastSwellSeverity !== severityNow.level;
-        if (ud.lastSwellMetric !== currentMetric || shouldShowLabel) {
-          ud.volumeDiv.textContent = formatSwellLabel(n, ud);
-          ud.lastSwellMetric = currentMetric;
-        }
-        if (severityChanged || shouldShowLabel) {
-          const style = getSeverityStyle(severityNow.level);
-          ud.volumeDiv.style.color = style.color;
-          ud.volumeDiv.style.borderColor = style.borderColor;
-          ud.volumeDiv.style.boxShadow = style.boxShadow;
-          ud.volumeDiv.style.textShadow = style.textShadow;
-          ud.lastSwellSeverity = severityNow.level;
-        }
-        
-        // Posicionar por encima del label de nombre para evitar solapamiento
-        const safeSY = Math.max(0.001, sY);
-        const volumeOffset = ud.volumeLabelOffset || 28;
-        const bothModesActive = State.perfMode && State.dataVolumeMode;
-        if (bothModesActive) {
-          ud.volumeLabel.position.set(40, ud.baseH + (volumeOffset / safeSY) + 10, 0);
+        if (shouldShow && inFocus) {
+          const safeSX = Math.max(0.001, m.scale.x || 1);
+          const safeSY = Math.max(0.001, sY);
+          // Stack above the time label when both modes are active.
+          const yOff = (State.perfMode ? 50 : 28);
+          volumeLabel.position.y = ud.baseH + (yOff / safeSY);
+          volumeLabel.position.x = 0;
+          const baseW = 36, baseHt = 14.4;
+          volumeLabel.scale.set(baseW / safeSX, baseHt / safeSY, 1);
+
+          // Ease-in opacity (identical math to timeLabel, threshold 600/150).
+          const targetOpacity = ghostVisible
+            ? 1.0
+            : Math.min(1.0, (600 - dist) / 150);
+          const currentOpacity = Number(volumeLabel.material.opacity) || 0;
+          volumeLabel.material.opacity = currentOpacity + (targetOpacity - currentOpacity) * 0.2;
+          volumeLabel.visible = volumeLabel.material.opacity > 0.03;
+
+          // Repaint texture only if text or severity changed (cached compare).
+          if (volumeLabel.visible) {
+            const isLowGfx = State.graphicsMode === 'low';
+            refreshVolumeSprite(
+              volumeLabel,
+              formatSwellLabel(n, ud),
+              swellSeverity.level,
+              isLowGfx
+            );
+          }
         } else {
-          ud.volumeLabel.position.y = ud.baseH + (volumeOffset / safeSY);
-          ud.volumeLabel.position.x = 0;
+          const currentOpacity = Number(volumeLabel.material.opacity) || 0;
+          volumeLabel.material.opacity = currentOpacity * 0.8;
+          volumeLabel.visible = volumeLabel.material.opacity > 0.03;
         }
+        } // end else (dataVolumeMode ON)
       }
 
       // ── Critical Volume Pulse Effect ─────────────────────
@@ -3242,48 +4217,11 @@ export function startAnimationLoop() {
       // Inter-island arcs live in globalArcsGroup which is always visible.
       if (e.parent && e.parent.visible === false) return;
 
-      if (is2DMode) {
-        if (e.line) e.line.visible = false;
-        if (e.arrow) e.arrow.visible = false;
-        if (Array.isArray(e.particles)) {
-          for (let j = 0; j < e.particles.length; j++) e.particles[j].visible = false;
-        }
-
-        if (e.diagramLine) {
-          const src = nodeMap[e.src];
-          const tgt = nodeMap[e.tgt];
-          if (src && tgt) {
-            const a = new THREE.Vector3(getDiagramNodeX(src), 2.0, getDiagramNodeZ(src));
-            const b = new THREE.Vector3(getDiagramNodeX(tgt), 2.0, getDiagramNodeZ(tgt));
-            e.diagramLine.geometry.setFromPoints([a, b]);
-            e.diagramLine.geometry.attributes.position.needsUpdate = true;
-            e.diagramLine.visible = true;
-
-            if (e.diagramArrow) {
-              const dir = b.clone().sub(a);
-              dir.y = 0;
-              if (dir.lengthSq() < 1e-6) dir.set(1, 0, 0);
-              dir.normalize();
-              const len = e.isInterIsland ? 12 : 9;
-              const origin = b.clone().addScaledVector(dir, -len * 0.9);
-              e.diagramArrow.position.copy(origin);
-              e.diagramArrow.setDirection(dir);
-              e.diagramArrow.visible = true;
-            }
-          }
-        }
-        return;
-      }
-
+      if (e.line) e.line.visible = true;
+      // NOTE: do NOT force arrow/particle visibility here. setGraphicsQuality
+      // owns it (HIGH=particles on/arrows off, LOW=particles off/arrows on).
       if (e.diagramLine) e.diagramLine.visible = false;
       if (e.diagramArrow) e.diagramArrow.visible = false;
-
-      if (e.arrow) {
-        e.arrow.visible = false;
-      }
-      if (e.diagramArrow) {
-        e.diagramArrow.visible = false;
-      }
 
       const parts = e.particles;
       for (let i = 0, len = parts.length; i < len; i++) {
@@ -3310,12 +4248,12 @@ export function startAnimationLoop() {
     const shouldRender = true;
     
     if (shouldRender) {
-      // Renderizado CSS2D para etiquetas de volumen
-      if (labelRenderer) {
-        labelRenderer.render(scene, camera);
-      }
+      // CSS2D label renderer call removed: volume labels now use the same
+      // GPU sprite pipeline as time/name labels. No per-frame DOM traversal.
       
-      if (composer && !is2DMode) {
+      // Skip EffectComposer in low mode, render directly to canvas
+      const isLowGraphics = State.graphicsMode === 'low';
+      if (composer && !isLowGraphics) {
         composer.render();
       } else {
         renderer.render(scene, camera);
@@ -3328,7 +4266,6 @@ export function startAnimationLoop() {
 }
 
 export function getRaycastTargets() {
-  if (is2DMode && diagramNodeTargets.length) return diagramNodeTargets;
   return meshes;
 }
 
@@ -3374,3 +4311,114 @@ export function updateLabelRendererSize() {
 
 // Listener para resize
 window.addEventListener('resize', updateLabelRendererSize);
+
+// ─────────────────────────────────────────────────────────
+// 🤫 Marketing / demo mode — DEV-ONLY console hook.
+// No UI, no buttons, no toasts. Open DevTools and call
+// `enableMarketingMode()` to inject deterministic-but-spectacular
+// execution_times into every node and trigger an instant city rebuild.
+// Default app behavior remains 100% honest (zeros stay zeros).
+// ─────────────────────────────────────────────────────────
+window.enableMarketingMode = function enableMarketingMode(opts) {
+  const { intensity = 1.0, seed = 'dagcity', silent = false, force } = opts || {};
+  const raw = State.get ? State.get('raw') : State.raw;
+  if (!raw || !raw.nodes || !raw.nodes.length) {
+    if (!silent) console.warn('[MarketingMode] No project loaded.');
+    return false;
+  }
+  raw.metadata = raw.metadata || {};
+
+  // ── Toggle behavior ──
+  // - force === true  → always enable
+  // - force === false → always disable (restore)
+  // - force === undefined → flip current state.
+  const currentlyOn = !!raw.metadata.marketing_mode;
+  const wantOn = (typeof force === 'boolean') ? force : !currentlyOn;
+
+  if (!wantOn) {
+    // RESTORE original execution_time + time_source from the snapshot taken
+    // when marketing mode was first enabled. If no snapshot exists, no-op.
+    const snap = raw.metadata.__pre_marketing__;
+    if (snap && Array.isArray(snap.nodes)) {
+      const byId = Object.create(null);
+      snap.nodes.forEach(s => { byId[s.id] = s; });
+      raw.nodes.forEach(n => {
+        const s = byId[n.id];
+        if (!s) return;
+        n.execution_time = s.execution_time;
+        n.time_source = s.time_source;
+      });
+      if (State.set) State.set('perfMode', !!snap.perfMode);
+    }
+    delete raw.metadata.marketing_mode;
+    delete raw.metadata.__pre_marketing__;
+    rebuildCity(raw, false);
+    if (!silent) {
+      console.log('%c[MarketingMode] Disabled — original times restored.',
+                  'color:#888;font-weight:bold');
+    }
+    return false;
+  }
+
+  // ── ENABLE ──
+  // Snapshot the pre-marketing state ONCE so we can restore on toggle off.
+  if (!raw.metadata.__pre_marketing__) {
+    raw.metadata.__pre_marketing__ = {
+      perfMode: !!State.perfMode,
+      nodes: raw.nodes.map(n => ({
+        id: n.id,
+        execution_time: n.execution_time,
+        time_source: n.time_source,
+      })),
+    };
+  }
+
+  // Deterministic PRNG (mulberry32) seeded with the project name + seed string.
+  let h = 2166136261;
+  const seedStr = (raw.metadata?.project_name || '') + '::' + seed;
+  for (let i = 0; i < seedStr.length; i++) {
+    h ^= seedStr.charCodeAt(i); h = Math.imul(h, 16777619);
+  }
+  let s = h >>> 0;
+  const rand = () => { s |= 0; s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+  raw.nodes.forEach(n => {
+    // Long-tail distribution: most nodes ~0.5-3s, ~10% bottlenecks 8-25s.
+    const r = rand();
+    const base = (r < 0.1) ? (8 + rand() * 17) : (0.3 + Math.pow(rand(), 1.6) * 4);
+    n.execution_time = +(base * intensity).toFixed(2);
+    // Honest provenance tag — NOT 'real'. The badge stays ∼ SIMULATED.
+    n.time_source = 'marketing';
+  });
+  raw.metadata.marketing_mode = true;
+  // Auto-enable Perf Mode so buildings visibly grow.
+  if (State.set) State.set('perfMode', true);
+  rebuildCity(raw, false);
+  if (!silent) {
+    console.log('%c[MarketingMode] Synthetic times injected into', 'color:#ff66c4;font-weight:bold',
+                raw.nodes.length, 'nodes.');
+  }
+  return true;
+};
+
+// ─────────────────────────────────────────────────────────
+// 🎹 Hidden keyboard shortcut: Ctrl/Cmd + Shift + M → Marketing Mode.
+// CRITICAL: bound to `window` with capture=true so the 3D canvas (which
+// has its own keyboard handlers via OrbitControls/raycaster) cannot
+// swallow the event. We log a single confirmation line and toggle the
+// city; no other UI feedback.
+// ─────────────────────────────────────────────────────────
+window.addEventListener('keydown', (event) => {
+  if (!((event.ctrlKey || event.metaKey) && event.shiftKey)) return;
+  if (!(event.key && event.key.toLowerCase() === 'm') && event.code !== 'KeyM') return;
+
+  // Allow the shortcut even when focused on an input — the user is the dev,
+  // and form inputs don't typically map Ctrl+Shift+M to anything important.
+  event.preventDefault();
+  console.log('🔥 Marketing Mode toggled');
+  try { window.enableMarketingMode && window.enableMarketingMode({ silent: true }); }
+  catch (err) { console.warn('[MarketingMode] toggle failed:', err); }
+}, true);

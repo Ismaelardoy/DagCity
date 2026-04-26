@@ -4,11 +4,15 @@
 import { State } from './State.js';
 import {
   meshes, nodeMeshMap, edgeObjs, nodeMap,
-  applySelection, applyBlastRadius, resetSelection, tweenCamera, updateFires, rebuildCity, flyToNode,
+  applySelection, applyBlastRadius, resetSelection, tweenCamera, updateFires, rebuildCity, flyToNode, flyToNodeNoSelect,
   makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics, getRaycastTargets, zoomToFitAll, GLOBAL_VIEW_FLIGHT_MS
 } from './CityEngine.js';
 import { controls, camera, composer } from './Visualizer.js';
 import { aiClient } from './AIClient.js';
+
+// ── Blast Radius danger threshold ───────────────────────
+// Tweak this to change when "Critical Danger" wording kicks in.
+const DANGER_THRESHOLD = 5;
 
 
 // ── Sidebar ────────────────────────────────────────────
@@ -63,10 +67,14 @@ function calculateImpact(nodeId, visited = new Set()) {
   };
 }
 
+// Graphics mode is now driven exclusively by setGraphicsQuality (CityEngine.js)
+// via the #graphics-slider element. No legacy checkbox handler here.
+
 function setPerfModeEnabled(enabled) {
   State.set('perfMode', !!enabled);
   const perfCheck = document.getElementById('check-perf-mode');
   if (perfCheck) perfCheck.checked = State.perfMode;
+  
   meshes.forEach(m => {
     const ud = m.userData;
     ud.targetH = State.perfMode ? ud.perfH : ud.baseH;
@@ -89,14 +97,37 @@ function setAutoRotateEnabled(enabled, shouldAnimate = true) {
 
 export function openSidebar(n) {
   const cols      = n.columns || [];
-  const execTime  = n.execution_time || 0;
   const isBN      = n.is_bottleneck;
   const statusCol = isBN ? '#ff4400' : '#39ff14';
   const statusLbl = isBN ? 'BOTTLENECK' : 'HEALTHY';
-  const tSrc      = n.time_source === 'real' ? '✓ from run_results.json' : '~ simulated (no run_results)';
+
+  // ── STRICT TIME LABEL CONTRACT ───────────────────────────
+  // The execution-time card shows ONE of two states, never both:
+  //   • Has real/marketing data   → number + sec  + provenance line
+  //   • No data                   → "Time: N/A"  + provenance line
+  // No concatenations, no "0.000sec next to N/A" contradictions.
+  const _execNum = Number(n.execution_time);
+  const _hasTime = (n.time_source === 'real' || n.time_source === 'marketing')
+    && Number.isFinite(_execNum) && _execNum > 0;
+
+  const tSrc = n.time_source === 'real'
+    ? '✓ from run_results.json'
+    : (n.time_source === 'marketing'
+        ? '🎬 marketing mode (synthetic, dev-only)'
+        : '— No execution time data');
+
+  const perfTimeHTML = _hasTime
+    ? `<div class="perf-time" style="color:${isBN?'#ff6600':'#ffffff'}">${_execNum.toFixed(3)}<span class="perf-unit">sec</span></div>`
+    : `<div class="perf-time" style="color:#666;font-size:28px;letter-spacing:2px;">Time: N/A</div>`;
   const impact = calculateImpact(n.id);
   const impactedCount = impact.impactedIds.length;
-  const exposureCount = impact.exposuresImpacted.length;
+  // Strict count: only nodes whose resource_type is literally 'exposure'.
+  // The heuristic-based exposuresImpacted (tags/name match) is too lax and was
+  // labeling regular models as Dashboard.
+  const exposureCount = impact.impactedIds.reduce((acc, id) => {
+    const node = nodeMap[id];
+    return acc + (node && String(node.resource_type || '').toLowerCase() === 'exposure' ? 1 : 0);
+  }, 0);
 
   sbContent.innerHTML = `
     <div class="sb-node-name" style="color:${n.color}">${n.name}</div>
@@ -121,7 +152,7 @@ export function openSidebar(n) {
     ` : ''}
     <div class="perf-card ${isBN?'bottleneck':'normal'}">
       <div class="perf-card-label">⏱ EXECUTION TIME</div>
-      <div class="perf-time" style="color:${isBN?'#ff6600':'#ffffff'}">${execTime.toFixed(3)}<span class="perf-unit">sec</span></div>
+      ${perfTimeHTML}
       <div class="perf-source">${tSrc}</div>
     </div>
     <div class="sb-section-title">// STATISTICS</div>
@@ -131,14 +162,32 @@ export function openSidebar(n) {
       <div class="sb-stat"><span class="val">${cols.length||'—'}</span><span class="lbl">Columns</span></div>
       <div class="sb-stat"><span class="val">${(n.upstream||[]).length+(n.downstream||[]).length}</span><span class="lbl">Total Deps</span></div>
     </div>
-    ${impactedCount > 0 ? `
-      <div class="sb-section-title" style="color:#ff7744">// 💥 IMPACT ASSESSMENT</div>
-      <div style="background:rgba(255,80,0,0.1);border:1px solid rgba(255,100,20,0.45);border-radius:10px;padding:14px 12px;margin-bottom:14px;box-shadow:0 0 14px rgba(255,80,0,0.18)">
-        <div style="font-size:13px;color:#ffd8c8;line-height:1.5;">Changing this model propagates to <strong style="color:#fff">${impactedCount}</strong> downstream nodes.</div>
-        ${exposureCount > 0 ? `<div style="margin-top:8px;font-size:12px;color:#ff9966;line-height:1.45;">⚠️ Critical Danger: Feeds <strong style="color:#fff">${exposureCount}</strong> connected Dashboards/Exposures.</div>` : ''}
-        <button id="btn-show-blast" style="margin-top:12px;background:linear-gradient(90deg,#ff4400,#ff7700);border:none;border-radius:8px;color:#fff;padding:8px 11px;font-size:11px;letter-spacing:1.4px;cursor:pointer;font-weight:bold;box-shadow:0 0 12px rgba(255,80,0,0.35)">[ SHOW BLAST RADIUS ]</button>
-      </div>
-    ` : ''}
+    ${(() => {
+      // ── Dynamic danger tiering ──────────────────────────
+      const isCritical = impactedCount >= DANGER_THRESHOLD || exposureCount > 0;
+      const isLow      = impactedCount > 0 && !isCritical;
+      const isSafe     = impactedCount === 0;
+
+      const tier = isSafe
+        ? { title: '// ✅ IMPACT ASSESSMENT', titleCol: '#39ff14',
+            bg: 'rgba(57,255,20,0.08)', border: 'rgba(57,255,20,0.4)', glow: 'rgba(57,255,20,0.18)',
+            text: 'Safe to modify. No downstream dependencies.', textCol: '#b8ffc4' }
+        : isLow
+        ? { title: '// ⚠️ IMPACT ASSESSMENT', titleCol: '#ffcc44',
+            bg: 'rgba(255,200,0,0.08)', border: 'rgba(255,200,0,0.45)', glow: 'rgba(255,200,0,0.18)',
+            text: `Low Impact: Feeds <strong style="color:#fff">${impactedCount}</strong> downstream node${impactedCount === 1 ? '' : 's'}.`, textCol: '#ffe9aa' }
+        : { title: '// 💥 IMPACT ASSESSMENT', titleCol: '#ff7744',
+            bg: 'rgba(255,80,0,0.1)', border: 'rgba(255,100,20,0.45)', glow: 'rgba(255,80,0,0.18)',
+            text: `Critical Danger: Feeds <strong style="color:#fff">${impactedCount}</strong> downstream nodes!${exposureCount > 0 ? ` Includes <strong style="color:#fff">${exposureCount}</strong> Dashboard/Exposure.` : ''}`, textCol: '#ffd8c8' };
+
+      return `
+      <div class="sb-section-title" style="color:${tier.titleCol}">${tier.title}</div>
+      <div style="background:${tier.bg};border:1px solid ${tier.border};border-radius:10px;padding:14px 12px;margin-bottom:14px;box-shadow:0 0 14px ${tier.glow}">
+        <div style="font-size:13px;color:${tier.textCol};line-height:1.5;">${tier.text}</div>
+        ${impactedCount > 0 ? `<button id="btn-show-blast" style="margin-top:12px;background:linear-gradient(90deg,#ff4400,#ff7700);border:none;border-radius:8px;color:#fff;padding:8px 11px;font-size:11px;letter-spacing:1.4px;cursor:pointer;font-weight:bold;box-shadow:0 0 12px rgba(255,80,0,0.35)">[ SHOW BLAST RADIUS ]</button>
+        <div id="blast-affected-list" style="display:none;margin-top:12px;max-height:150px;overflow-y:auto;border:1px solid rgba(255,100,20,0.25);border-radius:8px;background:rgba(0,0,0,0.35);padding:6px 4px;"></div>` : ''}
+      </div>`;
+    })()}
     <div class="sb-section-title">// METADATA</div>
     <div class="meta-row"><span class="key">SCHEMA</span><span class="val" style="color:${n.color}">${n.schema||'—'}</span></div>
     <div class="meta-row"><span class="key">MATERIALIZATION</span><span class="val">${n.materialized}</span></div>
@@ -164,6 +213,65 @@ export function openSidebar(n) {
     blastBtn.addEventListener('click', () => {
       const ids = [n.id, ...impact.impactedIds];
       applyBlastRadius(n.id, ids);
+
+      // ── Populate affected-nodes list (fast-travel, no selection reset) ─
+      const list = document.getElementById('blast-affected-list');
+      if (!list) return;
+      list.style.display = 'block';
+      const items = impact.impactedIds
+        .map(id => ({ id, node: nodeMap[id] }))
+        .filter(x => x.node)
+        .sort((a, b) => String(a.node.name).localeCompare(String(b.node.name)));
+
+      // Resource-type → tag mapping (read STRICTLY from node.resource_type)
+      const TAG_STYLES = {
+        model:    { label: 'MODEL',              color: '#7ad7ff' }, // soft cyan
+        seed:     { label: 'SEED',               color: '#7fff9d' }, // soft green
+        source:   { label: 'SOURCE',             color: '#c8a8ff' }, // soft purple
+        snapshot: { label: 'SNAPSHOT',           color: '#ffd86b' }, // soft amber
+        exposure: { label: 'EXPOSURE / DASHBOARD', color: '#ff7a44' }, // orange
+        metric:   { label: 'METRIC',             color: '#ff66c4' }, // pink
+      };
+      const tagFor = (rt) => {
+        const t = TAG_STYLES[String(rt || '').toLowerCase()];
+        return t || { label: 'NODE', color: '#888' };
+      };
+
+      list.innerHTML =
+        '<style>' +
+        '#blast-affected-list::-webkit-scrollbar{width:6px;}' +
+        '#blast-affected-list::-webkit-scrollbar-track{background:transparent;}' +
+        '#blast-affected-list::-webkit-scrollbar-thumb{background:#ff5500;border-radius:4px;box-shadow:0 0 6px rgba(255,85,0,0.6);}' +
+        '#blast-affected-list::-webkit-scrollbar-thumb:hover{background:#ff7733;}' +
+        '#blast-affected-list{scrollbar-width:thin;scrollbar-color:#ff5500 transparent;}' +
+        '</style>' +
+        (items.length ? items.map(({ id, node }) => {
+          const tag = tagFor(node.resource_type);
+          return `<div class="blast-aff-item" data-node-id="${id}" style="padding:6px 10px;font-size:12px;color:#ffd8c8;cursor:pointer;border-radius:6px;letter-spacing:0.3px;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:all 0.15s;">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${node.name}</span>
+            <span style="color:${tag.color};font-size:9px;letter-spacing:1.5px;font-weight:700;flex-shrink:0;">${tag.label}</span>
+          </div>`;
+        }).join('') : '<div style="padding:8px;color:#888;font-size:11px;">No affected nodes.</div>');
+
+      // Hover + click bindings
+      list.querySelectorAll('.blast-aff-item').forEach(el => {
+        el.addEventListener('mouseenter', () => {
+          el.style.background = 'rgba(255,100,20,0.18)';
+          el.style.color = '#fff';
+          el.style.boxShadow = '0 0 10px rgba(255,100,20,0.35)';
+        });
+        el.addEventListener('mouseleave', () => {
+          el.style.background = 'transparent';
+          el.style.color = '#ffd8c8';
+          el.style.boxShadow = 'none';
+        });
+        el.addEventListener('click', () => {
+          const id = el.getAttribute('data-node-id');
+          // Camera-only fly. Does NOT call applySelection / resetSelection,
+          // so the blast highlight on the original source stays intact.
+          flyToNodeNoSelect(id);
+        });
+      });
     });
   }
 }
@@ -178,8 +286,12 @@ export function closeSidebar() {
 
 // ── SLA Panel ──────────────────────────────────────────
 function toggleSlaPanel() {
+  // Mutual exclusion — close every other dock panel before opening this one.
+  // Without closing AI, both panels overlap at the same z-index/position and
+  // the AI (later in DOM) paints over SLA, making the click look like a no-op.
   if (isSettingsOpen) toggleSettingsPanel();
   if (isArchitectureOpen) toggleArchitecturePanel();
+  if (isAiPanelOpen) toggleAiPanel();
   isSlaPanelOpen = !isSlaPanelOpen;
   document.getElementById('sla-panel').classList.toggle('open', isSlaPanelOpen);
   document.getElementById('dock-sla').classList.toggle('active', isSlaPanelOpen);
@@ -591,7 +703,13 @@ function initArchitecturePanel() {
   }
 
   if (metricSelect) {
-    metricSelect.value = State.dataSwellMetric || 'execution_time';
+    // Fallback to 'rows' if the saved metric was removed from the dropdown.
+    const ALLOWED_METRICS = new Set(['rows', 'code_length', 'connections']);
+    const initialMetric = ALLOWED_METRICS.has(State.dataSwellMetric)
+      ? State.dataSwellMetric
+      : 'rows';
+    if (initialMetric !== State.dataSwellMetric) State.set('dataSwellMetric', initialMetric);
+    metricSelect.value = initialMetric;
     metricSelect.addEventListener('change', () => {
       State.set('dataSwellMetric', metricSelect.value);
       refreshAutoThreshold();
@@ -1222,12 +1340,32 @@ export function initRaycaster(renderer, camera) {
         break;
       }
     }
+    
+    // Handle hover state
     if (hoveredBuilding && hoveredBuilding !== foundMesh) {
       hoveredBuilding.userData.isHovered = false;
+      
+      // Hide labels when leaving hover in low graphics mode
+      if (State.graphicsMode === 'low') {
+        if (hoveredBuilding.userData.label) hoveredBuilding.userData.label.visible = false;
+        if (hoveredBuilding.userData.timeLabel) hoveredBuilding.userData.timeLabel.visible = false;
+      }
+      
       hoveredBuilding = null;
     }
+    
     if (foundNode) {
-      if (foundMesh) { foundMesh.userData.isHovered = true; hoveredBuilding = foundMesh; }
+      if (foundMesh) { 
+        foundMesh.userData.isHovered = true; 
+        hoveredBuilding = foundMesh;
+        
+        // Show labels on hover in low graphics mode
+        if (State.graphicsMode === 'low') {
+          if (foundMesh.userData.label) foundMesh.userData.label.visible = true;
+          if (foundMesh.userData.timeLabel) foundMesh.userData.timeLabel.visible = true;
+        }
+      }
+      
       tooltip.style.display = 'block';
       tooltip.style.left = (pendingClientX+15)+'px'; tooltip.style.top = (pendingClientY-38)+'px';
       tooltip.style.color = foundNode.color;
@@ -1307,6 +1445,8 @@ export function initSLA() {
       setPerfModeEnabled(perfCheck.checked);
     });
   }
+  
+  // Graphics slider binding is handled in main.js boot (single source of truth).
 
   const globalInput = document.getElementById('sla-global-input');
   const globalFill  = document.getElementById('sla-global-fill');
@@ -1369,11 +1509,11 @@ export function updateSyncHUD(source) {
 
   if (source === 'live_sync' || source === 'local_sync') {
     dot.className = 'status-dot green';
-    text.textContent = 'LIVE SYNC';
+    text.innerHTML = '📡 LIVE SYNC';
     text.style.color = '#39ff14';
   } else {
     dot.className = 'status-dot orange';
-    text.textContent = 'OFFLINE';
+    text.innerHTML = '⏸ OFFLINE';
     text.style.color = '#ffaa00';
   }
 }

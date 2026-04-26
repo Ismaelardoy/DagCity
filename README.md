@@ -90,7 +90,7 @@ DagCity/
 ├── src/
 │   ├── main.py               # Orchestrator — resilient startup logic
 │   └── core/
-│       ├── parser.py         # ManifestParser v4.1 — dbt manifest + run_results
+│       ├── parser.py         # ManifestParser v1.0 — dbt manifest + run_results
 │       └── generator.py      # VizGenerator — Three.js HTML builder + HTTP server
 ├── tests/
 │   └── test_parser.py        # Parser unit tests

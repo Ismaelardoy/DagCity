@@ -7,13 +7,16 @@ import * as Visualizer from './Visualizer.js';
 import {
   buildBuilding, buildEdge, startAnimationLoop, rebuildCity,
   meshes, nodeMap, nodeMeshMap, edgeObjs, voxels,
-  updateFires, LAYER_X, initLabelRenderer, flyToNode
+  updateFires, LAYER_X, initLabelRenderer, flyToNode,
+  disposeCity, pauseAnimationLoop, setGraphicsQuality,
+  setUserRenderDistance, getUserRenderDistance
 } from './CityEngine.js';
 import {
   initDock, initRaycaster, initSLA, initHUD,
-  renderZoneSliders, renderNodeOverrides, loadSLAFromProject
+  renderZoneSliders, renderNodeOverrides, loadSLAFromProject, updateSyncHUD
 } from './UIManager.js';
 import { initLiveSync, autoRestoreProject, connectLocal, initLivePipelineStatus } from './DataManager.js';
+import { dashboardManager } from './DashboardManager.js';
 
 // Load persisted configuration from localStorage
 State.loadPersisted();
@@ -180,11 +183,78 @@ initRaycaster(Visualizer.renderer, Visualizer.camera);
 initSLA();
 initHUD(Visualizer.renderer);
 
+// Boot the sync indicator into a known state (no project loaded yet → OFFLINE).
+// rebuildCity will refresh it whenever a project loads.
+updateSyncHUD('offline');
+window.addEventListener('dagcity:sync-source', (ev) => {
+  updateSyncHUD(ev.detail && ev.detail.source);
+});
+
+// ── 2b. Graphics quality: bind slider + apply persisted state ─
+// Single source of truth: setGraphicsQuality. Slider input AND boot use the
+// exact same function. No other code path touches renderer/composer for graphics.
+const savedGraphics = localStorage.getItem('dagcity_graphics') || '1';
+const graphicsSlider = document.getElementById('graphics-slider');
+if (graphicsSlider) {
+  graphicsSlider.value = savedGraphics;
+  graphicsSlider.addEventListener('input', (e) => {
+    setGraphicsQuality(e.target.value);
+  });
+}
+setGraphicsQuality(savedGraphics);
+
+// ── 2c. Render Distance slider: bind + apply persisted state ──
+// User-controlled camera.far. Read at boot from localStorage (handled inside
+// CityEngine.setUserRenderDistance), bound to UI slider here, and applied to
+// the camera immediately so it takes effect on the very first frame.
+const rdSlider = document.getElementById('render-distance-slider');
+const rdValEl = document.getElementById('render-distance-val');
+const initialRD = getUserRenderDistance();
+if (rdSlider) {
+  rdSlider.value = String(initialRD);
+  rdSlider.addEventListener('input', (e) => {
+    const v = parseInt(e.target.value, 10) || 2500;
+    setUserRenderDistance(v);
+    if (rdValEl) rdValEl.textContent = String(v);
+  });
+}
+if (rdValEl) rdValEl.textContent = String(initialRD);
+// Apply once so camera.far matches the slider on boot.
+setUserRenderDistance(initialRD);
+
+// Apply other persisted settings via the legacy bridge (labels/particles/neon)
+if (typeof window.applySettingsToEngine === 'function') {
+  window.applySettingsToEngine({
+    showLabels: State.showLabels,
+    showParticles: State.showParticles,
+    neonIntensity: State.neonIntensity,
+  });
+}
+
 // Expose Hub functions globally (called from HTML onclick)
 window.connectLocal = connectLocal;
 
 
-// ── 3. Load initial data from server injection ────────
+// ── 4. Initialize Dashboard Manager ─────────────────────
+// Initialize dashboard manager for project management and UI transitions
+const cityEngineAPI = {
+  rebuildCity: (data) => {
+    // Defensive cleanup before loading a new project
+    disposeCity({ resetCamera: true });
+    rebuildCity(data, false);
+    // Ensure animation loop is running (idempotent)
+    startAnimationLoop();
+  },
+  dispose: () => {
+    disposeCity({ resetCamera: true });
+  },
+  pause: pauseAnimationLoop,
+};
+dashboardManager.init(cityEngineAPI);
+
+// ── 5. Load initial data from server injection ────────
+// SILENT BOOT: Do NOT auto-load projects on startup
+// Only show dashboard and wait for user action
 const RAW = window.__RAW__ || { status: 'awaiting_upload', nodes: [], links: [], metadata: {} };
 State.set('raw', RAW);
 
@@ -196,42 +266,24 @@ if (AWAITING_DATA) {
   // Probe the environment and update the Live Pipeline panel
   initLivePipelineStatus();
 } else {
-  // Position nodes by layer
-  const lCnt = {}, lIdx = {};
-  RAW.nodes.forEach(n => { const l = n.layer||'default'; lCnt[l]=(lCnt[l]||0)+1; lIdx[l]=0; });
-  RAW.nodes.forEach(n => {
-    const l = n.layer||'default';
-    n.x = LAYER_X[l] ?? 0;
-    n.z = (lIdx[l] - (lCnt[l]-1)/2) * 70;
-    n.y = 0; lIdx[l]++;
-    nodeMap[n.id] = n;
-  });
-  RAW.nodes.forEach(n => buildBuilding(n));
-  RAW.links.forEach(l => buildEdge(l));
-
-  // Load SLA after building the city
-  loadSLAFromProject(RAW);
-  renderZoneSliders();
-  renderNodeOverrides();
-  updateFires();
-
-  // Update stats
-  const hasRealNew = RAW.metadata?.has_real_times || false;
-  const stats = document.getElementById('stats');
-  if (stats) stats.innerHTML =
-    `NODES&nbsp;<span style="color:#fff">${RAW.nodes.length}</span><br>EDGES&nbsp;<span style="color:#fff">${RAW.links?.length||0}</span><br>${hasRealNew?`<span style="color:var(--green)">✓ REAL TIMES</span>`:`<span style="color:var(--orange)">∼ SIMULATED</span>`}`;
+  // SILENT BOOT: Even if data exists, do NOT auto-load
+  // Show dashboard instead and let user choose to load
+  const overlay = document.getElementById('awaiting-overlay');
+  if (overlay) overlay.style.display = 'flex';
+  console.log('[DagCity] Silent boot: Data available but not auto-loaded. User must select project.');
 }
 
-// ── 4. Start render loop ──────────────────────────────
+// ── 6. Start render loop ──────────────────────────────
 startAnimationLoop();
 
-// ── 5. Connect Live Sync (SSE) ────────────────────────
+// ── 7. Connect Live Sync (SSE) ────────────────────────
 initLiveSync();
 
-// ── 6. Auto-restore project if awaiting data ──────────
-if (AWAITING_DATA) {
-  autoRestoreProject();
-}
+// ── 8. Auto-restore project if awaiting data ──────────
+// DISABLED: Do not auto-restore on startup
+// if (AWAITING_DATA) {
+//   autoRestoreProject();
+// }
 
-console.log('[DagCity] v5.1 — One-Click Live Sync Ready 🚀');
+console.log('[DagCity] v1.0 — One-Click Live Sync Ready 🚀');
 

@@ -61,7 +61,7 @@ def _is_project_startup_loadable(project_name: str) -> bool:
     current_live = _current_live_project_name()
     return bool(current_live and current_live == project_name)
 
-app = FastAPI(title="DagCity API", version="5.0")
+app = FastAPI(title="DagCity API", version="1.0")
 
 # Register modular routers
 app.include_router(projects_router)
@@ -105,7 +105,7 @@ def _autodiscover_project_name(manifest_dict: dict) -> str:
 async def get_status():
     """Reports the server status and Live Sync availability."""
     return {
-        "version": "5.1",
+        "version": "1.0",
         "live_sync_available": is_live_sync_available(),
         "external_path": config.EXTERNAL_MANIFEST_PATH if is_live_sync_available() else None,
         "projects_count": len(os.listdir(PROJECTS_DIR)) if os.path.exists(PROJECTS_DIR) else 0
@@ -265,10 +265,20 @@ os.makedirs(_STATIC_DST, exist_ok=True)
 # Static mount point
 app.mount("/static", StaticFiles(directory=_STATIC_DST), name="static")
 
+# Disable browser caching for /static so JS edits show up on refresh
+@app.middleware("http")
+async def _no_cache_static(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 @app.on_event("startup")
 async def startup_event():
     import core.streamer as streamer
-    print("--- DAG CITY v5.0: PERSISTENT WORKSPACE ---")
+    print("--- DAG CITY v1.0: PERSISTENT WORKSPACE ---")
     
     active_project = _get_workspace_active_project()
     graph_data = None
