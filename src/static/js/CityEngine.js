@@ -97,6 +97,11 @@ const LOD_MEDIUM_DISTANCE = 1500; // Simplified geometry
 const LOD_FAR_DISTANCE = 3000;    // Billboard imposters
 let lodEnabled = true;
 
+// ── Scene Detachment LOD (Monolith System) ───────────
+// Continuous LOD with monolith blocks for Global Mode
+const MONOLITH_LOD_DISTANCE = 2200; // Distance to switch to monolith
+const MONOLITH_LOD_HYSTERESIS = 250; // Hysteresis to prevent flickering
+
 // ── Billboard Imposter System ─────────────────────────
 // Simple colored sprites for distant nodes to reduce draw calls
 const imposterGroup = new THREE.Group();
@@ -3501,6 +3506,9 @@ export function rebuildCity(graphData, isLiveSync = false) {
   }
 
   State.emit('city:rebuilt', graphData);
+
+  // Initialize / refresh LOD after every rebuild.
+  updateLOD();
 }
 
 // ── Keyboard Drone Controls ────────────────────────────
@@ -3732,6 +3740,22 @@ export function disposeCity({ resetCamera = true } = {}) {
     delete islandCenters[k];
   });
 
+  // Cleanup monoliths from islandMeta
+  Object.keys(islandMeta).forEach(k => {
+    const meta = islandMeta[k];
+    if (meta && meta.monolith) {
+      if (meta.monolith.parent) meta.monolith.parent.remove(meta.monolith);
+      if (meta.monolith.geometry) meta.monolith.geometry.dispose();
+      if (meta.monolith.material) meta.monolith.material.dispose();
+      meta.monolith = null;
+    }
+    // Clear LOD saved references
+    meta._lodSavedParent = null;
+    meta._lodSavedLabel = null;
+    meta._lodSavedMonolith = null;
+    meta._lodFar = false;
+  });
+
   // Global arcs group
   if (globalArcsGroup) {
     while (globalArcsGroup.children.length) {
@@ -3787,6 +3811,14 @@ export function startAnimationLoop() {
       _lastControlChangeTime = performance.now();
     });
     controls.__cullHook = true;
+  }
+
+  // Bind LOD update to controls change with debounce
+  if (controls && !controls.__lodHook) {
+    controls.addEventListener('change', () => {
+      _scheduleLODUpdate();
+    });
+    controls.__lodHook = true;
   }
 
   window.addEventListener('resize', () => {
@@ -4266,7 +4298,185 @@ export function startAnimationLoop() {
 }
 
 export function getRaycastTargets() {
-  return meshes;
+  // RAYCASTER GUARD CLAUSE: When islands are in FAR state (detached from scene graph),
+  // the raycaster should NOT iterate over their meshes to avoid CPU overhead.
+  // Only return meshes from islands that are NEAR (detailed mode).
+  const targets = [];
+  for (let i = 0; i < meshes.length; i++) {
+    const m = meshes[i];
+    const ud = m.userData;
+    if (!ud || !ud.node) continue;
+    const group = ud.node.group || 'default';
+    const meta = islandMeta[group];
+    // Skip meshes from islands that are FAR (detached from scene graph)
+    if (meta && meta._lodFar) continue;
+    targets.push(m);
+  }
+  return targets;
+}
+
+// ═══════════════════════════════════════════════════════════
+// SCENE DETACHMENT LOD (Monolith System)
+// ───────────────────────────────────────────────────────────
+// Physically detaches island groups from scene graph when FAR,
+// reducing draw calls and CPU overhead to ZERO.
+// ═══════════════════════════════════════════════════════════
+
+function _ensureIslandMonolith(key) {
+  const meta = islandMeta[key];
+  if (!meta || meta.monolith) return;
+  const group = islandGroups[key];
+  if (!group) return;
+
+  // Calculate REAL geometric extent of the island using bounding box of its node meshes.
+  const bbox = new THREE.Box3();
+  let nodeCount = 0;
+  for (let i = 0; i < meshes.length; i++) {
+    const ud = meshes[i].userData;
+    if (ud && ud.node && ((ud.node.group || 'default') === key)) {
+      bbox.expandByObject(meshes[i]);
+      nodeCount++;
+    }
+  }
+
+  // Get REAL geometric center and size from bounding box.
+  const realSize = new THREE.Vector3();
+  bbox.getSize(realSize);
+  const realCenter = new THREE.Vector3();
+  bbox.getCenter(realCenter);
+
+  const realWidth = Math.max(100, realSize.x);
+  const realDepth = Math.max(100, realSize.z);
+
+  // Tight fit: exact bounding box + minimal padding (40 units)
+  const boxWidth = realWidth + 40;
+  const boxDepth = realDepth + 40;
+  const boxHeight = 150; // Reasonable height for a server/data block
+
+  // Solid opaque material — dark with cyan glow, acts as visual occluder.
+  const color = 0x0a192f; // Dark blue-gray
+  const geo = new THREE.BoxGeometry(boxWidth, boxHeight, boxDepth);
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    transparent: false,
+    opacity: 1,
+    emissive: 0x00f3ff,
+    emissiveIntensity: 0.3,
+    metalness: 0.5,
+    roughness: 0.5,
+    depthWrite: true,
+    side: THREE.FrontSide,
+  });
+  const monolith = new THREE.Mesh(geo, mat);
+  monolith.name = 'monolith';
+  // Position: use REAL geometric center from bounding box
+  monolith.position.set(realCenter.x, boxHeight / 2, realCenter.z);
+  monolith.visible = false;
+  monolith.castShadow = false;
+  monolith.receiveShadow = false;
+  monolith.userData.isMonolith = true;
+  monolith.userData.islandKey = key;
+  group.add(monolith);
+  meta.monolith = monolith;
+  meta.nodeCount = nodeCount;
+}
+
+function _setIslandLodState(key, lodFar) {
+  const meta = islandMeta[key];
+  if (!meta || meta._lodFar === lodFar) return;
+  meta._lodFar = lodFar;
+  const group = islandGroups[key];
+  if (!group) return;
+
+  // SCENE DETACHMENT (Nuclear Optimization):
+  // When FAR: physically detach the entire island group from the scene graph.
+  // This removes ALL children (meshes, particles, edges, labels) from the render pipeline.
+  // The renderer and raycaster will completely ignore them.
+  //
+  // EXCEPTION: islandLabel and monolith must remain connected.
+  // We extract them from the group before detaching, and reattach them to the parent.
+  if (lodFar) {
+    // Save the parent reference before detaching
+    if (group.parent && !meta._lodSavedParent) {
+      meta._lodSavedParent = group.parent;
+      meta._lodSavedParentIndex = meta._lodSavedParent.children.indexOf(group);
+    }
+
+    // Extract islandLabel and monolith before detaching
+    const labelChild = group.children.find(c => c.name === 'islandLabel');
+    const monolithChild = group.children.find(c => c.name === 'monolith' || c.userData?.isMonolith);
+
+    if (labelChild) {
+      group.remove(labelChild);
+      meta._lodSavedLabel = labelChild;
+    }
+    if (monolithChild) {
+      group.remove(monolithChild);
+      meta._lodSavedMonolith = monolithChild;
+    }
+
+    // Physically detach from scene graph
+    if (group.parent) {
+      group.parent.remove(group);
+    }
+
+    // Reattach label and monolith to the parent (they stay visible)
+    const parent = meta._lodSavedParent || scene;
+    if (labelChild) parent.add(labelChild);
+    if (monolithChild) parent.add(monolithChild);
+  } else {
+    // Reattach to scene graph when NEAR
+    if (meta._lodSavedParent) {
+      meta._lodSavedParent.add(group);
+      meta._lodSavedParent = null;
+      meta._lodSavedParentIndex = -1;
+    } else {
+      // Fallback: add to scene if parent reference lost
+      scene.add(group);
+    }
+
+    // Put label and monolith back into the island group
+    if (meta._lodSavedLabel) {
+      group.add(meta._lodSavedLabel);
+      meta._lodSavedLabel = null;
+    }
+    if (meta._lodSavedMonolith) {
+      group.add(meta._lodSavedMonolith);
+      meta._lodSavedMonolith = null;
+    }
+  }
+}
+
+const _lodCamPos = new THREE.Vector3();
+export function updateLOD() {
+  if (!camera || !islandMeta) return;
+  _lodCamPos.copy(camera.position);
+  const keys = Object.keys(islandMeta);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const meta = islandMeta[k];
+    if (!meta || !meta.center) continue;
+    _ensureIslandMonolith(k);
+
+    const dx = meta.center.x - _lodCamPos.x;
+    const dy = (meta.center.y || 0) - _lodCamPos.y;
+    const dz = meta.center.z - _lodCamPos.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    const wasFar = !!meta._lodFar;
+    const threshold = MONOLITH_LOD_DISTANCE + (wasFar ? -MONOLITH_LOD_HYSTERESIS : MONOLITH_LOD_HYSTERESIS);
+    _setIslandLodState(k, dist > threshold);
+  }
+  needsUpdate = true;
+}
+
+let _lodDebounceTimer = null;
+function _scheduleLODUpdate() {
+  if (_lodDebounceTimer) return;
+  _lodDebounceTimer = setTimeout(() => {
+    _lodDebounceTimer = null;
+    updateLOD();
+  }, 200);
 }
 
 function _dzHideOverlay() {
