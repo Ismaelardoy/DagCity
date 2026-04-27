@@ -53,7 +53,20 @@ export function initScene() {
 
   const W = window.innerWidth, H = window.innerHeight;
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  let bootGraphics = '1';
+  try {
+    const stored = localStorage.getItem('dagcity_graphics');
+    if (stored === '0' || stored === '1') {
+      bootGraphics = stored;
+    } else {
+      bootGraphics = State.graphicsMode === 'low' ? '0' : '1';
+    }
+  } catch (_) {
+    bootGraphics = State.graphicsMode === 'low' ? '0' : '1';
+  }
+  const bootIsHigh = bootGraphics === '1';
+
+  renderer = new THREE.WebGLRenderer({ antialias: bootIsHigh, powerPreference: "high-performance" });
   renderer.setSize(W, H);
   // NOTE: pixelRatio and shadowMap are NOT configured here. setGraphicsQuality
   // (CityEngine.js) is the single source of truth and is called at boot from main.js.

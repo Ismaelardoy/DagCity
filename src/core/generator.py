@@ -1308,8 +1308,8 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 <div id="header">DAG_CITY</div>
 <div id="subtitle">PERFORMANCE PROFILER · OBSERVABILITY ENGINE V1.0</div>
 
-<button id="btn-global-view" type="button" title="Global View (M) — orbit camera around the city" aria-label="Global View">🌎</button>
-<button id="btn-tactical-map" type="button" title="Global Pipeline View" aria-label="Global Pipeline View">🗺️</button>
+<button id="btn-global-view" type="button" title="Global View (G) — orbit camera around the city" aria-label="Global View (press G)">🌎</button>
+<button id="btn-tactical-map" type="button" title="Global Map (M)" aria-label="Global Map (press M)">🗺️</button>
 
 <button id="omni-launch">⌘/Ctrl + K · Jump to model…</button>
 <div id="omni-modal">
@@ -1319,11 +1319,11 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
   </div>
 </div>
 
-<!-- Global Pipeline View Overlay -->
+<!-- Global Map Overlay -->
 <div id="tactical-map-overlay" style="display: none;">
   <div id="tactical-map-container">
     <div id="tactical-map-header">
-      <h2>GLOBAL PIPELINE VIEW</h2>
+      <h2>GLOBAL MAP</h2>
       <button id="close-tactical-map" title="Close">✕</button>
     </div>
     <canvas id="tactical-map-canvas"></canvas>
@@ -1675,20 +1675,6 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
     </div>
 
     <div class="sla-section">
-      <div class="sla-label">Render Distance</div>
-      <div class="graphics-control">
-        <span>1k</span>
-        <input type="range" id="render-distance-slider" min="1000" max="10000" step="100" value="2500">
-        <span>10k</span>
-      </div>
-      <div class="sla-row" style="margin-top:8px;">
-        <div class="sla-name">Far Plane</div>
-        <div class="sla-val" id="render-distance-val">2500</div>
-      </div>
-      <div class="sla-desc" style="margin-top:8px;">Maximum view distance. Lower = faster FPS, less city visible at once. Global View temporarily overrides this to fit the whole map.</div>
-    </div>
-
-    <div class="sla-section">
       <div class="sla-label">Global SLA Threshold</div>
       <div class="sla-row">
         <div class="sla-name">Execution Time Limit</div>
@@ -1697,7 +1683,7 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
       <div class="sla-desc">Buildings on fire = execution_time &gt; this threshold</div>
       <div class="sla-slider-track">
         <div class="sla-slider-fill" id="sla-global-fill" style="width:12%"></div>
-        <input type="range" class="sla-input" id="sla-global-input" min="0" max="1000" value="120">
+        <input type="range" class="sla-input" id="sla-global-input" min="0" max="1000" step="0.1" value="120.0">
       </div>
       <div class="sla-fire-count">
         <div class="fire-num" id="sla-fire-count">0</div>
@@ -1769,7 +1755,7 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
       </div>
       <div class="sla-slider-track">
         <div class="sla-slider-fill" id="fill-fly-speed" style="width:20%"></div>
-        <input type="range" class="sla-input" id="input-fly-speed" min="50" max="300" value="100" oninput="window._onFlySpeed(this.value)" onchange="window._onFlySpeedChange()">
+        <input type="range" class="sla-input" id="input-fly-speed" min="50" max="800" value="100" oninput="window._onFlySpeed(this.value)" onchange="window._onFlySpeedChange()">
       </div>
     </div>
 
@@ -1785,7 +1771,7 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
       <div class="sla-desc" style="margin-top:-5px;margin-bottom:20px;">Smooth cinematic orbit around the city</div>
 
       <button class="settings-action-btn" id="btn-reset-view">RESET VIEW</button>
-      <button class="settings-action-btn" id="btn-global-view-settings" style="margin-top:10px;">🌎 VISTA GLOBAL</button>
+      <button class="settings-action-btn" id="btn-global-view-settings" style="margin-top:10px;">🌎 GLOBAL VIEW</button>
     </div>
 
     <div class="settings-section">
@@ -1889,11 +1875,14 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
 
         <div class="settings-row" style="margin-top:18px;">
           <div class="settings-name">Swell Intensity</div>
-          <div class="settings-val" id="val-swell-intensity">1.0x</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="number" id="input-swell-intensity-number" class="arch-number" min="0.5" max="2.0" step="0.1" value="1.0" style="width:78px;">
+            <div class="settings-val" id="val-swell-intensity">1.0x</div>
+          </div>
         </div>
         <div class="sla-slider-track">
           <div class="sla-slider-fill" id="fill-swell-intensity" style="width:20%"></div>
-          <input type="range" class="sla-input" id="input-swell-intensity" min="50" max="300" value="100">
+          <input type="range" class="sla-input" id="input-swell-intensity" min="0.5" max="2.0" step="0.1" value="1.0">
         </div>
 
         <div class="settings-row" style="margin-top:16px;">

@@ -69,6 +69,7 @@ const islandGroups = {};            // group_name -> THREE.Group
 const islandMeta = {};              // group_name -> { center: Vector3, radius: number }
 const islandCenters = {};           // group_name -> { x: number, z: number } (explicit center coordinates)
 let globalArcsGroup = null;         // holds inter-island arcs (never culled)
+const TACTICAL_RING_Y = -10;
 let MAX_RENDER_DISTANCE = 50000;    // beyond this, hide island entirely (mutated by DRS)
 const CULL_INTERVAL_FRAMES = 10;    // re-evaluate visibility every N frames
 let _cullFrameCounter = 0;
@@ -87,6 +88,8 @@ let _wasIdleLastFrame = false;
 let isSystemAnimating = false;
 let _lastSystemAnimEndMs = 0;
 let _drsDisabledUntilMs = 0; // DRS completely disabled until this time
+let _layoutEdgeRefreshPending = false;
+let _edgeRefreshFrameTick = 0;
 const MIN_CAMERA_FAR = 1200;
 const MIN_RENDER_DISTANCE = 800;
 const MIN_GLOBAL_DISTANCE = 2400;
@@ -101,6 +104,7 @@ let lodEnabled = true;
 // Continuous LOD with monolith blocks for Global Mode
 const MONOLITH_LOD_DISTANCE = 2200; // Distance to switch to monolith
 const MONOLITH_LOD_HYSTERESIS = 250; // Hysteresis to prevent flickering
+const ALWAYS_RENDER_DISTANCE = 1e9;
 
 // ── Billboard Imposter System ─────────────────────────
 // Simple colored sprites for distant nodes to reduce draw calls
@@ -227,18 +231,20 @@ function initTacticalMap() {
     }
   });
 
-  // Bind M key — opens GLOBAL VIEW (cinematic camera). Pipeline View modal
-  // no longer hijacks M (it had a misleading hotkey hint before).
-  bindGlobalViewHotkey();
+  // Bind keyboard shortcuts:
+  // - G: Global View (cinematic camera)
+  // - M: Global Map overlay
+  bindGlobalHotkeys();
 }
 
-function bindGlobalViewHotkey() {
+function bindGlobalHotkeys() {
   if (tacticalMapHotkeyBound) return;
   if (typeof window === 'undefined') return;
 
   window.addEventListener('keydown', (ev) => {
     if (ev.defaultPrevented || ev.repeat) return;
-    if ((ev.key || '').toLowerCase() !== 'm') return;
+    const key = (ev.key || '').toLowerCase();
+    if (key !== 'g' && key !== 'm') return;
 
     const target = ev.target;
     const tag = target && target.tagName ? String(target.tagName).toLowerCase() : '';
@@ -246,7 +252,11 @@ function bindGlobalViewHotkey() {
     if (typing) return;
 
     ev.preventDefault();
-    triggerGlobalView(GLOBAL_VIEW_FLIGHT_MS);
+    if (key === 'g') {
+      triggerGlobalView(GLOBAL_VIEW_FLIGHT_MS);
+    } else {
+      toggleTacticalMap();
+    }
   });
 
   tacticalMapHotkeyBound = true;
@@ -443,7 +453,7 @@ function fastTravelToIsland(islandKey, worldX, worldZ) {
 
   console.log('[Navigation] Fast travel to island:', islandKey, 'at', worldX, worldZ);
 
-  // Close global pipeline view
+  // Close Global Map overlay
   closeTacticalMap();
 
   // Compute a high-angle "helicopter" framing using the island radius (if known)
@@ -469,14 +479,59 @@ function fastTravelToIsland(islandKey, worldX, worldZ) {
   });
 }
 
+export function flyToIsland(islandKey) {
+  const key = islandKey || 'default';
+  const meta = islandMeta[key];
+  if (!meta || !meta.center) return;
+  fastTravelToIsland(key, meta.center.x, meta.center.z);
+}
+
 function ensureTacticalMapButton() {
   if (typeof document === 'undefined') return;
 
   const btn = document.getElementById('btn-tactical-map');
   if (!btn) return;
 
+  btn.title = 'Global Map (M)';
+  btn.setAttribute('aria-label', 'Global Map (press M)');
+
   if (!btn.dataset.mapBound) {
     btn.addEventListener('click', toggleTacticalMap);
+
+    const hint = document.createElement('div');
+    hint.id = 'global-map-hint';
+    hint.textContent = 'Global Map · M';
+    hint.style.cssText = [
+      'position: fixed',
+      'top: 66px',
+      'right: 70px',
+      'z-index: 261',
+      'padding: 6px 12px',
+      'border-radius: 999px',
+      'background: rgba(6,14,24,0.92)',
+      'border: 1px solid rgba(0,243,255,0.55)',
+      'color: #00f3ff',
+      'font-family: "JetBrains Mono", monospace',
+      'font-size: 11px',
+      'font-weight: 700',
+      'letter-spacing: 0.8px',
+      'box-shadow: 0 0 12px rgba(0,243,255,0.35)',
+      'pointer-events: none',
+      'opacity: 0',
+      'transform: translateY(-6px)',
+      'transition: opacity 0.18s, transform 0.18s',
+      'white-space: nowrap'
+    ].join(';');
+    document.body.appendChild(hint);
+    btn.addEventListener('mouseenter', () => {
+      hint.style.opacity = '1';
+      hint.style.transform = 'translateY(0)';
+    });
+    btn.addEventListener('mouseleave', () => {
+      hint.style.opacity = '0';
+      hint.style.transform = 'translateY(-6px)';
+    });
+
     btn.dataset.mapBound = '1';
   }
 }
@@ -1158,7 +1213,7 @@ function resolveSwellMetricValue(n, ud, metric) {
 
   if (metric === 'connections') {
     const deps = ((n.upstream || []).length + (n.downstream || []).length);
-    return Math.max(1, deps * 50000);
+    return Math.max(1, deps);
   }
 
   // Default: execution_time (mapped to larger domain for stable log scaling)
@@ -1166,13 +1221,18 @@ function resolveSwellMetricValue(n, ud, metric) {
   return Math.max(1, exec * 100000);
 }
 
-function getSwellScaleForNode(n, ud) {
+function getSwellScaleForNode(n, ud, intensityOverride = null) {
   const metric = State.dataSwellMetric || 'uniform';
   // Uniform base plate: identical 1.0 scale for every node — clean honest look.
   if (metric === 'uniform') {
     return { widthScale: 1.0, heightScale: 1.0, weight: 0 };
   }
-  const intensity = Math.max(0.5, Math.min(3.0, Number(State.dataSwellIntensity) || 1.0));
+  const hasOverride = intensityOverride !== null && intensityOverride !== undefined;
+  const rawIntensity = hasOverride
+    ? Number(intensityOverride)
+    : Number(State.dataSwellIntensity);
+  const uiIntensity = Math.max(0.5, Math.min(2.0, rawIntensity || 1.0));
+  const intensity = Math.max(1.0, Math.min(3.0, uiIntensity * 2.0));
   const metricValue = resolveSwellMetricValue(n, ud, metric);
   const userDefinedThreshold = Math.max(
     1,
@@ -1184,22 +1244,162 @@ function getSwellScaleForNode(n, ud) {
   const blendedWeight = (weight * 0.3) + (finalWeight * 0.7);
 
   const metricProfile = {
-    rows: { gamma: 0.72, widthGain: 2.55, heightGain: 0.92 },
-    execution_time: { gamma: 0.95, widthGain: 1.75, heightGain: 0.58 },
-    code_length: { gamma: 0.82, widthGain: 2.15, heightGain: 0.70 },
-    connections: { gamma: 0.78, widthGain: 2.30, heightGain: 0.76 },
-  }[metric] || { gamma: 0.82, widthGain: 2.10, heightGain: 0.70 };
+    rows: { gamma: 0.92, widthGain: 4.8, heightGain: 0.95, widthCap: 7.6, overflowHeightGain: 4.2 },
+    execution_time: { gamma: 1.00, widthGain: 3.8, heightGain: 0.72, widthCap: 6.8, overflowHeightGain: 3.6 },
+    code_length: { gamma: 0.96, widthGain: 4.3, heightGain: 0.82, widthCap: 7.2, overflowHeightGain: 3.9 },
+    connections: { gamma: 0.94, widthGain: 4.5, heightGain: 0.86, widthCap: 7.4, overflowHeightGain: 4.0 },
+  }[metric] || { gamma: 0.95, widthGain: 4.2, heightGain: 0.82, widthCap: 7.0, overflowHeightGain: 3.8 };
 
   const profiledWeight = Math.pow(Math.max(0, blendedWeight), metricProfile.gamma);
+  const contrastWeight = Math.pow(profiledWeight, 1.18);
 
-  const widthScale = 1.0 + (profiledWeight * intensity * metricProfile.widthGain);
-  const heightScale = 1.0 + (profiledWeight * intensity * metricProfile.heightGain);
+  // Stage 1: prioritize width growth for readability.
+  const widthRaw = 1.0 + (contrastWeight * intensity * metricProfile.widthGain);
+  const widthScale = Math.min(metricProfile.widthCap, widthRaw);
+
+  // Stage 2: once width saturates, push growth into height.
+  const preCapHeight = 1.0 + (contrastWeight * intensity * metricProfile.heightGain * 0.35);
+  let overflowHeightBoost = 0;
+  if (widthRaw > metricProfile.widthCap) {
+    const capSpan = Math.max(0.25, metricProfile.widthCap - 1.0);
+    const overflow = (widthRaw - metricProfile.widthCap) / capSpan;
+    overflowHeightBoost = Math.pow(Math.max(0, overflow), 0.82) * metricProfile.overflowHeightGain * intensity;
+  }
+  const heightScale = preCapHeight + overflowHeightBoost;
 
   return {
-    widthScale: Math.max(1.0, Math.min(widthScale, 12.0)),
-    heightScale: Math.max(1.0, Math.min(heightScale, 4.5)),
+    widthScale: Math.max(1.0, Math.min(widthScale, metricProfile.widthCap)),
+    heightScale: Math.max(1.0, Math.min(heightScale, 9.5)),
     weight: profiledWeight,
   };
+}
+
+function refreshEdgeGeometryFromNodes() {
+  for (let i = 0; i < edgeObjs.length; i++) {
+    const edge = edgeObjs[i];
+    const src = nodeMap[edge.src];
+    const tgt = nodeMap[edge.tgt];
+    const srcMesh = nodeMeshMap[edge.src];
+    const tgtMesh = nodeMeshMap[edge.tgt];
+    if (!src || !tgt || !edge.curve) continue;
+
+    const start = edge.curve.v0 || (Array.isArray(edge.curve.points) ? edge.curve.points[0] : null);
+    const mid = edge.curve.v1 || (Array.isArray(edge.curve.points) ? edge.curve.points[1] : null);
+    const end = edge.curve.v2 || (Array.isArray(edge.curve.points) ? edge.curve.points[2] : null);
+    if (!start || !mid || !end) continue;
+
+    const sx = srcMesh ? srcMesh.position.x : (Number.isFinite(src?.x) ? src.x : 0);
+    const sz = srcMesh ? srcMesh.position.z : (Number.isFinite(src?.z) ? src.z : 0);
+    const tx = tgtMesh ? tgtMesh.position.x : (Number.isFinite(tgt?.x) ? tgt.x : 0);
+    const tz = tgtMesh ? tgtMesh.position.z : (Number.isFinite(tgt?.z) ? tgt.z : 0);
+
+    start.set(sx, 10, sz);
+    end.set(tx, 10, tz);
+    const dist = Math.hypot(tx - sx, tz - sz);
+    const midY = edge.isInterIsland ? Math.max(400, dist * 0.35) : 22;
+    mid.set((sx + tx) * 0.5, midY, (sz + tz) * 0.5);
+
+    if (edge.line && edge.line.geometry) {
+      edge.line.geometry.setFromPoints(edge.curve.getPoints(32));
+      if (edge.line.geometry.computeBoundingSphere) {
+        edge.line.geometry.computeBoundingSphere();
+      }
+    }
+
+    if (Array.isArray(edge.particles) && edge.particles.length) {
+      for (let j = 0; j < edge.particles.length; j++) {
+        const p = edge.particles[j];
+        if (!p || !p.userData) continue;
+        p.userData.curve = edge.curve;
+        const t = Number(p.userData.t) || 0;
+        edge.curve.getPoint(t, _tmpVec3);
+        p.position.copy(_tmpVec3);
+      }
+    }
+  }
+}
+
+function applyDynamicSwellLayout() {
+  const enabled = !!State.dataVolumeMode;
+
+  const buckets = {};
+  for (let i = 0; i < meshes.length; i++) {
+    const n = meshes[i]?.userData?.node;
+    if (!n) continue;
+    const key = `${n.group || 'default'}::${n.layer || 'default'}`;
+    (buckets[key] = buckets[key] || []).push(n);
+  }
+
+  if (!enabled) {
+    let changed = false;
+    const keys = Object.keys(buckets);
+    for (let i = 0; i < keys.length; i++) {
+      const arr = buckets[keys[i]];
+      for (let j = 0; j < arr.length; j++) {
+        const n = arr[j];
+        if (!Number.isFinite(n._baseLayoutX) || !Number.isFinite(n._baseLayoutZ)) continue;
+        if (Math.abs(n.x - n._baseLayoutX) > 0.01 || Math.abs(n.z - n._baseLayoutZ) > 0.01) {
+          n.x += (n._baseLayoutX - n.x) * 0.2;
+          n.z += (n._baseLayoutZ - n.z) * 0.2;
+          changed = true;
+        } else {
+          n.x = n._baseLayoutX;
+          n.z = n._baseLayoutZ;
+        }
+      }
+    }
+    if (changed) _layoutEdgeRefreshPending = true;
+    return;
+  }
+
+  let changed = false;
+  const keys = Object.keys(buckets);
+  for (let i = 0; i < keys.length; i++) {
+    const arr = buckets[keys[i]];
+    if (!arr.length) continue;
+
+    let cx = 0;
+    let cz = 0;
+    let maxWidth = 1;
+    for (let j = 0; j < arr.length; j++) {
+      const n = arr[j];
+      const bx = Number.isFinite(n._baseLayoutX) ? n._baseLayoutX : n.x;
+      const bz = Number.isFinite(n._baseLayoutZ) ? n._baseLayoutZ : n.z;
+      cx += bx;
+      cz += bz;
+      const w = getSwellScaleForNode(n, null, 1.0).widthScale;
+      if (w > maxWidth) maxWidth = w;
+    }
+    cx /= arr.length;
+    cz /= arr.length;
+
+    const blockStretch = 1 + Math.max(0, maxWidth - 1) * 0.26;
+
+    for (let j = 0; j < arr.length; j++) {
+      const n = arr[j];
+      const bx = Number.isFinite(n._baseLayoutX) ? n._baseLayoutX : n.x;
+      const bz = Number.isFinite(n._baseLayoutZ) ? n._baseLayoutZ : n.z;
+      const dx = bx - cx;
+      const dz = bz - cz;
+
+      const ownW = getSwellScaleForNode(n, null, 1.0).widthScale;
+      const ownPush = Math.max(0, ownW - 1) * 8;
+      const len = Math.hypot(dx, dz);
+      const dirX = len > 1e-4 ? (dx / len) : 0;
+      const dirZ = len > 1e-4 ? (dz / len) : 0;
+
+      const tx = cx + dx * blockStretch + dirX * ownPush;
+      const tz = cz + dz * blockStretch + dirZ * ownPush;
+
+      if (Math.abs(n.x - tx) > 0.01 || Math.abs(n.z - tz) > 0.01) {
+        n.x += (tx - n.x) * 0.2;
+        n.z += (tz - n.z) * 0.2;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) _layoutEdgeRefreshPending = true;
 }
 
 function getSwellThresholdRatios() {
@@ -1359,21 +1559,17 @@ export let critSet = new Set();
 let camTween = null;
 let cinematicFlightActive = false;
 let cinematicPrevDRSEnabled = true;
-export const GLOBAL_VIEW_FLIGHT_MS = 2000;
+export const GLOBAL_VIEW_FLIGHT_MS = 4200;
+let islandJumpPanel = null;
+let islandJumpSelect = null;
 
 // ─────────────────────────────────────────────────────────
-// USER RENDER DISTANCE — pro feature.
-// The user's chosen camera.far value (slider 1000–10000). Persisted globally
-// in localStorage under 'dagcity_render_distance'. Authoritative whenever the
-// camera is NOT in Global View. When Global View is active, camera.far is
-// temporarily expanded to fit the whole island ring, and is restored to this
-// value the moment the user grabs the camera (controls 'start' event).
+// RENDER DISTANCE POLICY — always show everything.
+// camera.far and MAX_RENDER_DISTANCE are pinned to a very large value so
+// users do not need to tune render distance and the whole city stays visible.
 // ─────────────────────────────────────────────────────────
 let userRenderDistance = (() => {
-  try {
-    const v = parseInt(localStorage.getItem('dagcity_render_distance') || '2500', 10);
-    return (Number.isFinite(v) && v >= 500) ? v : 2500;
-  } catch (_) { return 2500; }
+  return ALWAYS_RENDER_DISTANCE;
 })();
 let isGlobalViewActive = false;
 // Snapshot of OrbitControls settings BEFORE Global View mutates them, so an
@@ -1383,9 +1579,8 @@ let _preGlobalViewControlsState = null;
 export function getUserRenderDistance() { return userRenderDistance; }
 
 export function setUserRenderDistance(v) {
-  const val = Math.max(500, Math.min(20000, parseInt(v, 10) || 2500));
+  const val = ALWAYS_RENDER_DISTANCE;
   userRenderDistance = val;
-  try { localStorage.setItem('dagcity_render_distance', String(val)); } catch (_) {}
   // Apply immediately ONLY if not currently in Global View (which has its own
   // larger far plane). Global View → user-distance restoration happens on
   // controls 'start' (see registerControlsInterruptHandler).
@@ -2227,18 +2422,19 @@ function _bindControlsInterruptHandler() {
       // Restore DRS (was disabled by the cinematic flight).
       if (DRS) DRS.enabled = cinematicPrevDRSEnabled;
     }
-    // 2. Exit Global View — restore user-chosen render distance + controls.
+    // 2. Exit Global View — keep infinite render distance + restore controls.
     if (isGlobalViewActive) {
       isGlobalViewActive = false;
+      if (islandJumpPanel) islandJumpPanel.style.display = 'none';
       if (camera) {
-        camera.far = userRenderDistance || 2500;
+        camera.far = ALWAYS_RENDER_DISTANCE;
         camera.updateProjectionMatrix();
       }
       if (DRS) {
-        DRS.baseCameraFar = userRenderDistance || 2500;
-        DRS.baseRenderDistance = userRenderDistance || 2500;
+        DRS.baseCameraFar = ALWAYS_RENDER_DISTANCE;
+        DRS.baseRenderDistance = ALWAYS_RENDER_DISTANCE;
       }
-      MAX_RENDER_DISTANCE = userRenderDistance || 2500;
+      MAX_RENDER_DISTANCE = ALWAYS_RENDER_DISTANCE;
       _cullDirty = true;
       // CRITICAL: put OrbitControls back to the user's normal navigation feel
       // (autoRotate off, original min/maxDistance, original zoom/damping).
@@ -2480,6 +2676,7 @@ export function fitCameraToAll(durationMs = 1500) {
   }
   cinematicFlightActive = true;
   isGlobalViewActive = true; // user can still interrupt; controls 'start' will reset far
+  syncIslandJumpMenuVisibility();
   isSystemAnimating = true;
   DRS.enabled = false;
   _suspendSectorCulling = true;
@@ -2535,7 +2732,7 @@ export function fitCameraToAll(durationMs = 1500) {
       // Enable fast auto-rotation in global view
       if (controls) {
         controls.autoRotate = true;
-        controls.autoRotateSpeed = 5.0; // Very fast rotation
+        controls.autoRotateSpeed = 1.35;
         controls.update();
       }
       
@@ -2567,6 +2764,10 @@ export function triggerGlobalView(durationMs = GLOBAL_VIEW_FLIGHT_MS) {
   fitCameraToAll(durationMs);
 }
 
+export function isGlobalViewMode() {
+  return !!isGlobalViewActive;
+}
+
 // ── Force High Quality Frame ─────────────────────────────
 // Called after system animations (e.g., Global View) to restore
 // maximum quality and render a clean "gold frame" before going idle.
@@ -2582,13 +2783,10 @@ function forceHighQualityFrame() {
     renderer.setPixelRatio(devicePixelRatio);
   }
   
-  // Restore camera.far and MAX_RENDER_DISTANCE to safe high values
-  const safeFar = Math.max(MIN_GLOBAL_DISTANCE, DRS.baseCameraFar || MIN_GLOBAL_DISTANCE);
-  const safeRenderDist = Math.max(MIN_RENDER_DISTANCE, DRS.baseRenderDistance || MIN_RENDER_DISTANCE);
-  
-  camera.far = safeFar;
+  // Keep camera.far and MAX_RENDER_DISTANCE effectively infinite.
+  camera.far = ALWAYS_RENDER_DISTANCE;
   camera.updateProjectionMatrix();
-  MAX_RENDER_DISTANCE = safeRenderDist;
+  MAX_RENDER_DISTANCE = ALWAYS_RENDER_DISTANCE;
   
   // Reset DRS to baseline to prevent immediate re-degradation
   DRS.step = 0;
@@ -2669,7 +2867,7 @@ function flyToIslandCenter(islandKey) {
   const radiusOffset = Math.max(220, (meta.radius || 250) * 0.75);
   const dest = focus.clone().add(currentDir.multiplyScalar(radiusOffset));
   dest.y = Math.max(110, camera.position.y);
-  tweenCamera(dest, focus, 1000);
+  tweenCamera(dest, focus, 1900);
 }
 
 function getCityCenterXZ() {
@@ -2782,8 +2980,8 @@ function ensureGlobalViewButton() {
     btn = document.createElement('button');
     btn.id = 'btn-global-view';
     btn.type = 'button';
-    btn.title = 'Global View (M) — orbit camera around the city';
-    btn.setAttribute('aria-label', 'Global View (press M)');
+    btn.title = 'Global View (G) — orbit camera around the city';
+    btn.setAttribute('aria-label', 'Global View (press G)');
     btn.innerHTML = '<span aria-hidden="true">🌎</span>';
     btn.style.cssText = [
       'position: fixed',
@@ -2808,23 +3006,26 @@ function ensureGlobalViewButton() {
     document.body.appendChild(btn);
   }
 
+  btn.title = 'Global View (G) — orbit camera around the city';
+  btn.setAttribute('aria-label', 'Global View (press G)');
+
   globalViewBtn = btn;
   if (!btn.dataset.globalBound) {
     btn.addEventListener('click', () => triggerGlobalView(GLOBAL_VIEW_FLIGHT_MS));
 
-    // Force-bind the M hotkey here too so it's available BEFORE the user has
-    // ever opened the Pipeline View modal (initTacticalMap was the previous
+    // Force-bind hotkeys here too so they're available BEFORE the user has
+    // ever opened the Global Map modal (initTacticalMap was the previous
     // — and only — caller, which meant M was inert until then).
-    bindGlobalViewHotkey();
+    bindGlobalHotkeys();
 
-    // Floating "Press M" hint bubble shown on hover.
+    // Floating hint bubble shown below the button on hover.
     const hint = document.createElement('div');
     hint.id = 'global-view-hint';
-    hint.textContent = 'Press M';
+    hint.textContent = 'Global View · G';
     hint.style.cssText = [
       'position: fixed',
-      'top: 28px',
-      'right: 70px',
+      'top: 66px',
+      'right: 18px',
       'z-index: 261',
       'padding: 6px 12px',
       'border-radius: 999px',
@@ -2834,25 +3035,153 @@ function ensureGlobalViewButton() {
       'font-family: "JetBrains Mono", monospace',
       'font-size: 11px',
       'font-weight: 700',
-      'letter-spacing: 1.6px',
+      'letter-spacing: 0.8px',
       'box-shadow: 0 0 12px rgba(0,243,255,0.35)',
       'pointer-events: none',
       'opacity: 0',
-      'transform: translateX(8px)',
-      'transition: opacity 0.18s, transform 0.18s'
+      'transform: translateY(-6px)',
+      'transition: opacity 0.18s, transform 0.18s',
+      'white-space: nowrap'
     ].join(';');
     document.body.appendChild(hint);
     btn.addEventListener('mouseenter', () => {
       hint.style.opacity = '1';
-      hint.style.transform = 'translateX(0)';
+      hint.style.transform = 'translateY(0)';
     });
     btn.addEventListener('mouseleave', () => {
       hint.style.opacity = '0';
-      hint.style.transform = 'translateX(8px)';
+      hint.style.transform = 'translateY(-6px)';
     });
 
     btn.dataset.globalBound = '1';
   }
+
+  ensureIslandJumpMenu();
+}
+
+function refreshIslandJumpMenuOptions() {
+  if (!islandJumpSelect) return;
+
+  const keys = Object.keys(islandMeta).filter(k => !!islandMeta[k]);
+  keys.sort((a, b) => String(a).localeCompare(String(b)));
+  const prev = islandJumpSelect.value;
+
+  islandJumpSelect.innerHTML = '';
+  if (!keys.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No islands';
+    islandJumpSelect.appendChild(opt);
+    islandJumpSelect.disabled = true;
+    return;
+  }
+
+  islandJumpSelect.disabled = false;
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const opt = document.createElement('option');
+    opt.value = k;
+    opt.textContent = k;
+    islandJumpSelect.appendChild(opt);
+  }
+
+  if (prev && keys.includes(prev)) islandJumpSelect.value = prev;
+}
+
+function syncIslandJumpMenuVisibility() {
+  if (!islandJumpPanel) return;
+  islandJumpPanel.style.display = isGlobalViewActive ? 'block' : 'none';
+}
+
+function ensureIslandJumpMenu() {
+  if (typeof document === 'undefined') return;
+
+  if (!islandJumpPanel) {
+    islandJumpPanel = document.getElementById('global-island-jump-panel');
+    if (!islandJumpPanel) {
+      islandJumpPanel = document.createElement('div');
+      islandJumpPanel.id = 'global-island-jump-panel';
+      islandJumpPanel.style.cssText = [
+        'position: fixed',
+        'top: 118px',
+        'right: 18px',
+        'z-index: 261',
+        'width: 240px',
+        'padding: 10px',
+        'box-sizing: border-box',
+        'border-radius: 12px',
+        'border: 1px solid rgba(0,243,255,0.45)',
+        'background: rgba(6,14,24,0.9)',
+        'box-shadow: 0 10px 24px rgba(0,0,0,0.35)',
+        'backdrop-filter: blur(6px)',
+        '-webkit-backdrop-filter: blur(6px)',
+        'display: none'
+      ].join(';');
+
+      const title = document.createElement('div');
+      title.textContent = 'Islands';
+      title.style.cssText = [
+        'color: #00f3ff',
+        'font-family: "JetBrains Mono", monospace',
+        'font-size: 11px',
+        'font-weight: 700',
+        'letter-spacing: 0.8px',
+        'margin-bottom: 8px'
+      ].join(';');
+      islandJumpPanel.appendChild(title);
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;';
+
+      islandJumpSelect = document.createElement('select');
+      islandJumpSelect.id = 'global-island-jump-select';
+      islandJumpSelect.style.cssText = [
+        'flex: 1',
+        'min-width: 0',
+        'height: 30px',
+        'border-radius: 8px',
+        'border: 1px solid rgba(0,243,255,0.35)',
+        'background: rgba(8,18,30,0.95)',
+        'color: #e9f9ff',
+        'font-size: 12px',
+        'padding: 0 8px'
+      ].join(';');
+      row.appendChild(islandJumpSelect);
+
+      const goBtn = document.createElement('button');
+      goBtn.type = 'button';
+      goBtn.textContent = 'Go';
+      goBtn.style.cssText = [
+        'height: 30px',
+        'padding: 0 10px',
+        'flex-shrink: 0',
+        'white-space: nowrap',
+        'border-radius: 8px',
+        'border: 1px solid rgba(0,243,255,0.45)',
+        'background: rgba(0,243,255,0.08)',
+        'color: #dff7ff',
+        'cursor: pointer',
+        'font-size: 12px',
+        'font-weight: 600'
+      ].join(';');
+      goBtn.addEventListener('click', () => {
+        const key = islandJumpSelect ? islandJumpSelect.value : '';
+        if (!key) return;
+        flyToIslandCenter(key);
+      });
+      row.appendChild(goBtn);
+
+      islandJumpPanel.appendChild(row);
+      document.body.appendChild(islandJumpPanel);
+    }
+  }
+
+  if (!islandJumpSelect && islandJumpPanel) {
+    islandJumpSelect = islandJumpPanel.querySelector('#global-island-jump-select');
+  }
+
+  refreshIslandJumpMenuOptions();
+  syncIslandJumpMenuVisibility();
 }
 
 function ensureRadarHUD() {
@@ -3131,6 +3460,11 @@ export function setGraphicsQuality(level) {
     renderer.shadowMap.enabled = isHigh;
     renderer.setPixelRatio(isHigh ? Math.min(window.devicePixelRatio || 1, 2) : 1);
   }
+  if (camera) {
+    camera.far = ALWAYS_RENDER_DISTANCE;
+    camera.updateProjectionMatrix();
+  }
+  MAX_RENDER_DISTANCE = ALWAYS_RENDER_DISTANCE;
 
   // 2. Post-processing: bloom on in HIGH, off in LOW.
   if (bloomPass) bloomPass.enabled = isHigh;
@@ -3167,6 +3501,14 @@ export function setGraphicsQuality(level) {
   // 6. Sync slider DOM idempotently.
   const slider = document.getElementById('graphics-slider');
   if (slider) slider.value = isHigh ? '1' : '0';
+
+  if (renderer) {
+    const pr = (typeof renderer.getPixelRatio === 'function') ? renderer.getPixelRatio() : 'n/a';
+    console.log('[GraphicsBoot] applied mode=', isHigh ? 'high' : 'low',
+      ' pixelRatio=', pr,
+      ' shadowMap=', !!renderer.shadowMap?.enabled,
+      ' bloom=', !!bloomPass?.enabled);
+  }
 
   needsUpdate = true;
 }
@@ -3216,15 +3558,13 @@ window.applySettingsToEngine = function(settings) {
     }
   }
 
-  // perfMode and viewMode handled elsewhere (UIManager / setPerfModeEnabled).
+  needsUpdate = true;
 };
 
 export function rebuildCity(graphData, isLiveSync = false) {
-  const nodes = graphData.nodes || [];
-  const links = graphData.links || [];
+  const nodes = Array.isArray(graphData?.nodes) ? graphData.nodes : [];
+  const links = Array.isArray(graphData?.links) ? graphData.links : [];
 
-  // ─────────────────────────────────────────────────────────
-  // HONESTY PASS — sanitize execution_time at the data ingress chokepoint.
   // Any node whose time_source is NOT 'real' or 'marketing' must have
   // execution_time = 0. This kills stale/cached values from older builds
   // (e.g. IndexedDB projects parsed when synthetic times were still injected)
@@ -3374,6 +3714,25 @@ export function rebuildCity(graphData, isLiveSync = false) {
     if (l.material) l.material.dispose();
   });
   islandLabels.length = 0;
+
+  // Per-island tactical rings
+  Object.keys(islandMeta).forEach(k => {
+    const meta = islandMeta[k];
+    if (!meta || !meta.tacticalRing) return;
+    if (meta.tacticalRing.parent) meta.tacticalRing.parent.remove(meta.tacticalRing);
+    if (meta.tacticalRing.geometry) meta.tacticalRing.geometry.dispose();
+    if (meta.tacticalRing.material?.map) meta.tacticalRing.material.map.dispose();
+    if (meta.tacticalRing.material) meta.tacticalRing.material.dispose();
+    if (meta._ringFadeRaf) {
+      cancelAnimationFrame(meta._ringFadeRaf);
+      meta._ringFadeRaf = null;
+    }
+    if (meta._ringLabelTimer) {
+      clearTimeout(meta._ringLabelTimer);
+      meta._ringLabelTimer = null;
+    }
+    meta.tacticalRing = null;
+  });
   
   // Dispose empty island groups (will be recreated on demand)
   Object.keys(islandGroups).forEach(k => {
@@ -3410,7 +3769,17 @@ export function rebuildCity(graphData, isLiveSync = false) {
     
     const labelSprite = makeSprite(`ISLAND: ${p.toUpperCase()}`, '#ffdf00');
     labelSprite.name = 'islandLabel';
+    labelSprite.userData.islandKey = p;
+    labelSprite.userData.islandOrder = i;
+    if (labelSprite.material) {
+      labelSprite.material.transparent = true;
+      labelSprite.material.depthWrite = false;
+      labelSprite.material.depthTest = true;
+    }
+    labelSprite.renderOrder = 1000;
     labelSprite.scale.set(labelSprite.scale.x * 6, labelSprite.scale.y * 6, 1);
+    labelSprite.userData.baseScaleX = labelSprite.scale.x;
+    labelSprite.userData.baseScaleY = labelSprite.scale.y;
     labelSprite.position.set(projectCenters[p].dx, 600, projectCenters[p].dz);
     _islandParent(p).add(labelSprite);
     islandLabels.push(labelSprite);
@@ -3421,6 +3790,33 @@ export function rebuildCity(graphData, isLiveSync = false) {
       center: new THREE.Vector3(projectCenters[p].dx, 0, projectCenters[p].dz),
       radius: 800
     };
+
+    // Per-island tactical disk with integrated island name (independent LOD toggle)
+    const ringRadius = Math.max(360, islandMeta[p || 'default'].radius * 0.75);
+    const ringGeo = new THREE.CircleGeometry(ringRadius, 96);
+    const islandUpperName = String(p || 'ISLAND').toUpperCase();
+    const islandNode = nodes.find(n => (n.group || 'default') === p);
+    const islandColor = (islandNode && islandNode.color) ? islandNode.color : 0x00f3ff;
+    const ringTex = _createIslandTacticalTexture(islandUpperName, islandColor);
+    const ringMat = new THREE.MeshBasicMaterial({
+      map: ringTex,
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.name = 'tacticalRing';
+    ring.userData.islandKey = p;
+    ring.rotation.x = -Math.PI * 0.5;
+    ring.position.set(projectCenters[p].dx, TACTICAL_RING_Y, projectCenters[p].dz);
+    ring.visible = false;
+    ring.material.opacity = 0;
+    ring.userData.maxOpacity = 0.9;
+    ring.renderOrder = -1000;
+    scene.add(ring);
+    islandMeta[p || 'default'].tacticalRing = ring;
   });
 
   // ── Sequential Grid-Wrap Layout ───────────────────────
@@ -3457,6 +3853,8 @@ export function rebuildCity(graphData, isLiveSync = false) {
         const row = Math.floor(i / maxPerRow);
         n.x = cursorX + row * nodeSpacingX;
         n.z = (col - (cols - 1) / 2) * nodeSpacingZ + center.dz;
+        n._baseLayoutX = n.x;
+        n._baseLayoutZ = n.z;
         n.y = 0;
         nodeMap[n.id] = n;
       });
@@ -3484,6 +3882,7 @@ export function rebuildCity(graphData, isLiveSync = false) {
 
   // Calculate island centers for navigation system
   calculateIslandCenters();
+  ensureIslandJumpMenu();
 
   State.set('raw', graphData);
 
@@ -3532,7 +3931,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
 function updateDroneMovement() {
-  const moveSpeed = 2.5 * (State.flySpeed || 1.0);
+  const moveSpeed = 12.5 * (State.flySpeed || 1.0);
   const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
   const side = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
   if (keys['KeyW'] || keys['ArrowUp'])    { camera.position.addScaledVector(dir,  moveSpeed); controls.target.addScaledVector(dir,  moveSpeed); }
@@ -3740,20 +4139,28 @@ export function disposeCity({ resetCamera = true } = {}) {
     delete islandCenters[k];
   });
 
-  // Cleanup monoliths from islandMeta
+  // Clear LOD saved references
   Object.keys(islandMeta).forEach(k => {
     const meta = islandMeta[k];
-    if (meta && meta.monolith) {
-      if (meta.monolith.parent) meta.monolith.parent.remove(meta.monolith);
-      if (meta.monolith.geometry) meta.monolith.geometry.dispose();
-      if (meta.monolith.material) meta.monolith.material.dispose();
-      meta.monolith = null;
-    }
-    // Clear LOD saved references
+    if (!meta) return;
     meta._lodSavedParent = null;
     meta._lodSavedLabel = null;
-    meta._lodSavedMonolith = null;
     meta._lodFar = false;
+    if (meta.tacticalRing) {
+      if (meta.tacticalRing.parent) meta.tacticalRing.parent.remove(meta.tacticalRing);
+      if (meta.tacticalRing.geometry) meta.tacticalRing.geometry.dispose();
+      if (meta.tacticalRing.material?.map) meta.tacticalRing.material.map.dispose();
+      if (meta.tacticalRing.material) meta.tacticalRing.material.dispose();
+      meta.tacticalRing = null;
+    }
+    if (meta._ringFadeRaf) {
+      cancelAnimationFrame(meta._ringFadeRaf);
+      meta._ringFadeRaf = null;
+    }
+    if (meta._ringLabelTimer) {
+      clearTimeout(meta._ringLabelTimer);
+      meta._ringLabelTimer = null;
+    }
   });
 
   // Global arcs group
@@ -3831,6 +4238,12 @@ export function startAnimationLoop() {
     const observer = new MutationObserver(() => { needsUpdate = true; });
     observer.observe(sidebar, { attributes: true, attributeFilter: ['class'] });
   }
+
+  // HARD BOOT ENFORCEMENT: before the first RAF, force the exact graphics
+  // pipeline through the same toggle path used by the UI (no constructor trust).
+  setGraphicsQuality(State.graphicsMode === 'low' ? '0' : '1');
+
+  let _bootRenderLogged = false;
 
   function animate() {
     // Handle tactical map render pending (deferred rendering after DOM paint)
@@ -3927,6 +4340,7 @@ export function startAnimationLoop() {
     }
 
     updateDroneMovement();
+    applyDynamicSwellLayout();
 
     const globalElapsed = now - buildStart;
     const isMimicry = globalElapsed > 1000;
@@ -4268,6 +4682,14 @@ export function startAnimationLoop() {
       }
     });
 
+    if (_layoutEdgeRefreshPending) {
+      _edgeRefreshFrameTick = (_edgeRefreshFrameTick + 1) % 2;
+      if (_edgeRefreshFrameTick === 0) {
+        refreshEdgeGeometryFromNodes();
+        _layoutEdgeRefreshPending = false;
+      }
+    }
+
     controls.update();
     
     // Update grid unfolding/folding animation only when not interacting
@@ -4283,11 +4705,24 @@ export function startAnimationLoop() {
       // CSS2D label renderer call removed: volume labels now use the same
       // GPU sprite pipeline as time/name labels. No per-frame DOM traversal.
       
-      // Skip EffectComposer in low mode, render directly to canvas
       const isLowGraphics = State.graphicsMode === 'low';
-      if (composer && !isLowGraphics) {
+      if (isLowGraphics) {
+        if (!_bootRenderLogged) {
+          _bootRenderLogged = true;
+          console.log('[GraphicsBoot] first-frame render path=renderer (LOW)');
+        }
+        renderer.render(scene, camera);
+      } else if (composer) {
+        if (!_bootRenderLogged) {
+          _bootRenderLogged = true;
+          console.log('[GraphicsBoot] first-frame render path=composer (HIGH)');
+        }
         composer.render();
       } else {
+        if (!_bootRenderLogged) {
+          _bootRenderLogged = true;
+          console.log('[GraphicsBoot] first-frame render path=renderer-fallback (HIGH without composer)');
+        }
         renderer.render(scene, camera);
       }
     }
@@ -4312,6 +4747,16 @@ export function getRaycastTargets() {
     if (meta && meta._lodFar) continue;
     targets.push(m);
   }
+
+  // Also include visible tactical rings so users can click them to fly to islands.
+  const islandKeys = Object.keys(islandMeta);
+  for (let i = 0; i < islandKeys.length; i++) {
+    const meta = islandMeta[islandKeys[i]];
+    const ring = meta && meta.tacticalRing;
+    if (!ring || !ring.visible) continue;
+    targets.push(ring);
+  }
+
   return targets;
 }
 
@@ -4322,65 +4767,6 @@ export function getRaycastTargets() {
 // reducing draw calls and CPU overhead to ZERO.
 // ═══════════════════════════════════════════════════════════
 
-function _ensureIslandMonolith(key) {
-  const meta = islandMeta[key];
-  if (!meta || meta.monolith) return;
-  const group = islandGroups[key];
-  if (!group) return;
-
-  // Calculate REAL geometric extent of the island using bounding box of its node meshes.
-  const bbox = new THREE.Box3();
-  let nodeCount = 0;
-  for (let i = 0; i < meshes.length; i++) {
-    const ud = meshes[i].userData;
-    if (ud && ud.node && ((ud.node.group || 'default') === key)) {
-      bbox.expandByObject(meshes[i]);
-      nodeCount++;
-    }
-  }
-
-  // Get REAL geometric center and size from bounding box.
-  const realSize = new THREE.Vector3();
-  bbox.getSize(realSize);
-  const realCenter = new THREE.Vector3();
-  bbox.getCenter(realCenter);
-
-  const realWidth = Math.max(100, realSize.x);
-  const realDepth = Math.max(100, realSize.z);
-
-  // Tight fit: exact bounding box + minimal padding (40 units)
-  const boxWidth = realWidth + 40;
-  const boxDepth = realDepth + 40;
-  const boxHeight = 150; // Reasonable height for a server/data block
-
-  // Solid opaque material — dark with cyan glow, acts as visual occluder.
-  const color = 0x0a192f; // Dark blue-gray
-  const geo = new THREE.BoxGeometry(boxWidth, boxHeight, boxDepth);
-  const mat = new THREE.MeshStandardMaterial({
-    color,
-    transparent: false,
-    opacity: 1,
-    emissive: 0x00f3ff,
-    emissiveIntensity: 0.3,
-    metalness: 0.5,
-    roughness: 0.5,
-    depthWrite: true,
-    side: THREE.FrontSide,
-  });
-  const monolith = new THREE.Mesh(geo, mat);
-  monolith.name = 'monolith';
-  // Position: use REAL geometric center from bounding box
-  monolith.position.set(realCenter.x, boxHeight / 2, realCenter.z);
-  monolith.visible = false;
-  monolith.castShadow = false;
-  monolith.receiveShadow = false;
-  monolith.userData.isMonolith = true;
-  monolith.userData.islandKey = key;
-  group.add(monolith);
-  meta.monolith = monolith;
-  meta.nodeCount = nodeCount;
-}
-
 function _setIslandLodState(key, lodFar) {
   const meta = islandMeta[key];
   if (!meta || meta._lodFar === lodFar) return;
@@ -4388,13 +4774,47 @@ function _setIslandLodState(key, lodFar) {
   const group = islandGroups[key];
   if (!group) return;
 
+  const _fadeRingTo = (targetOpacity, durationMs, onDone) => {
+    const ring = meta.tacticalRing;
+    if (!ring || !ring.material) {
+      if (onDone) onDone();
+      return;
+    }
+    if (meta._ringFadeRaf) {
+      cancelAnimationFrame(meta._ringFadeRaf);
+      meta._ringFadeRaf = null;
+    }
+    const from = Number(ring.material.opacity) || 0;
+    const to = Number(targetOpacity) || 0;
+    const start = performance.now();
+    const dur = Math.max(1, Number(durationMs) || 1);
+
+    const step = (now) => {
+      // Stop stale tween if state changed again.
+      if (!!meta._lodFar !== !!lodFar) {
+        meta._ringFadeRaf = null;
+        return;
+      }
+      const t = Math.min(1, (now - start) / dur);
+      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      ring.material.opacity = from + (to - from) * eased;
+      ring.material.needsUpdate = true;
+      if (t < 1) {
+        meta._ringFadeRaf = requestAnimationFrame(step);
+      } else {
+        meta._ringFadeRaf = null;
+        if (onDone) onDone();
+      }
+    };
+    meta._ringFadeRaf = requestAnimationFrame(step);
+  };
+
   // SCENE DETACHMENT (Nuclear Optimization):
   // When FAR: physically detach the entire island group from the scene graph.
   // This removes ALL children (meshes, particles, edges, labels) from the render pipeline.
   // The renderer and raycaster will completely ignore them.
   //
-  // EXCEPTION: islandLabel and monolith must remain connected.
-  // We extract them from the group before detaching, and reattach them to the parent.
+  // EXCEPTION: islandLabel must remain connected.
   if (lodFar) {
     // Save the parent reference before detaching
     if (group.parent && !meta._lodSavedParent) {
@@ -4402,28 +4822,38 @@ function _setIslandLodState(key, lodFar) {
       meta._lodSavedParentIndex = meta._lodSavedParent.children.indexOf(group);
     }
 
-    // Extract islandLabel and monolith before detaching
+    // Extract islandLabel before detaching
     const labelChild = group.children.find(c => c.name === 'islandLabel');
-    const monolithChild = group.children.find(c => c.name === 'monolith' || c.userData?.isMonolith);
 
     if (labelChild) {
       group.remove(labelChild);
       meta._lodSavedLabel = labelChild;
-    }
-    if (monolithChild) {
-      group.remove(monolithChild);
-      meta._lodSavedMonolith = monolithChild;
+      labelChild.visible = false;
     }
 
-    // Physically detach from scene graph
-    if (group.parent) {
-      group.parent.remove(group);
-    }
-
-    // Reattach label and monolith to the parent (they stay visible)
+    // Reattach label to the parent (stays visible)
     const parent = meta._lodSavedParent || scene;
     if (labelChild) parent.add(labelChild);
-    if (monolithChild) parent.add(monolithChild);
+    if (meta._lodSavedLabel) {
+      meta._lodSavedLabel.visible = false;
+    }
+    if (meta._ringLabelTimer) {
+      clearTimeout(meta._ringLabelTimer);
+      meta._ringLabelTimer = null;
+    }
+
+    // FAR transition: fade IN ring first; detach detailed group only when ring is fully visible.
+    if (meta.tacticalRing) {
+      meta.tacticalRing.visible = true;
+      meta.tacticalRing.material.opacity = 0;
+      const maxOpacity = Number(meta.tacticalRing.userData.maxOpacity) || 0.9;
+      _fadeRingTo(maxOpacity, 260, () => {
+        if (!meta._lodFar) return;
+        if (group.parent) group.parent.remove(group);
+      });
+    } else {
+      if (group.parent) group.parent.remove(group);
+    }
   } else {
     // Reattach to scene graph when NEAR
     if (meta._lodSavedParent) {
@@ -4435,16 +4865,99 @@ function _setIslandLodState(key, lodFar) {
       scene.add(group);
     }
 
-    // Put label and monolith back into the island group
+    // Put label back into the island group
     if (meta._lodSavedLabel) {
       group.add(meta._lodSavedLabel);
+      meta._lodSavedLabel.visible = false;
+    }
+
+    // NEAR transition: detailed group appears immediately; ring fades out smoothly.
+    if (meta.tacticalRing) {
+      meta.tacticalRing.visible = true;
+      const maxOpacity = Number(meta.tacticalRing.userData.maxOpacity) || 0.9;
+      if (meta.tacticalRing.material.opacity <= 0) meta.tacticalRing.material.opacity = maxOpacity;
+      if (meta._ringLabelTimer) {
+        clearTimeout(meta._ringLabelTimer);
+        meta._ringLabelTimer = null;
+      }
+      // Show floating label around half of the fade-out.
+      meta._ringLabelTimer = setTimeout(() => {
+        if (meta._lodFar) return;
+        if (meta._lodSavedLabel) {
+          const lbl = meta._lodSavedLabel;
+          lbl.visible = true;
+          const baseX = Number(lbl.userData?.baseScaleX) || lbl.scale.x;
+          const baseY = Number(lbl.userData?.baseScaleY) || lbl.scale.y;
+          lbl.scale.set(baseX, baseY, 1);
+          meta._lodSavedLabel = null;
+        }
+      }, 110);
+      _fadeRingTo(0, 220, () => {
+        if (meta._lodFar) return;
+        if (meta.tacticalRing) meta.tacticalRing.visible = false;
+      });
+    } else if (meta._lodSavedLabel) {
+      meta._lodSavedLabel.visible = true;
+      const lbl = meta._lodSavedLabel;
+      const baseX = Number(lbl.userData?.baseScaleX) || lbl.scale.x;
+      const baseY = Number(lbl.userData?.baseScaleY) || lbl.scale.y;
+      lbl.scale.set(baseX, baseY, 1);
       meta._lodSavedLabel = null;
     }
-    if (meta._lodSavedMonolith) {
-      group.add(meta._lodSavedMonolith);
-      meta._lodSavedMonolith = null;
-    }
   }
+
+}
+
+function _createIslandTacticalTexture(islandName, ringColorHex) {
+  const size = 1024;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, size, size);
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+  const outerR = size * 0.455;
+  const innerR = size * 0.30;
+  const colorHex = `#${(Number(ringColorHex) >>> 0).toString(16).padStart(6, '0')}`;
+
+  const glow = ctx.createRadialGradient(cx, cy, innerR * 0.35, cx, cy, outerR);
+  glow.addColorStop(0, 'rgba(0, 0, 0, 0.0)');
+  glow.addColorStop(0.6, 'rgba(0, 243, 255, 0.08)');
+  glow.addColorStop(1, 'rgba(0, 243, 255, 0.18)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = colorHex;
+  ctx.lineWidth = Math.max(8, size * 0.018);
+  ctx.globalAlpha = 0.95;
+  ctx.beginPath();
+  ctx.arc(cx, cy, outerR * 0.98, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `900 ${Math.floor(size * 0.13)}px Arial Black, Inter, Roboto, sans-serif`;
+  const name = String(islandName || 'ISLAND').toUpperCase();
+  const maxWidth = size * 0.82;
+  if (ctx.measureText(name).width > maxWidth) {
+    ctx.font = `900 ${Math.floor(size * 0.10)}px Arial Black, Inter, Roboto, sans-serif`;
+  }
+  ctx.fillText(name, cx, cy, maxWidth);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = renderer?.capabilities?.getMaxAnisotropy ? Math.min(8, renderer.capabilities.getMaxAnisotropy()) : 1;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 const _lodCamPos = new THREE.Vector3();
@@ -4456,7 +4969,6 @@ export function updateLOD() {
     const k = keys[i];
     const meta = islandMeta[k];
     if (!meta || !meta.center) continue;
-    _ensureIslandMonolith(k);
 
     const dx = meta.center.x - _lodCamPos.x;
     const dy = (meta.center.y || 0) - _lodCamPos.y;
@@ -4465,8 +4977,10 @@ export function updateLOD() {
 
     const wasFar = !!meta._lodFar;
     const threshold = MONOLITH_LOD_DISTANCE + (wasFar ? -MONOLITH_LOD_HYSTERESIS : MONOLITH_LOD_HYSTERESIS);
-    _setIslandLodState(k, dist > threshold);
+    const isFar = dist > threshold;
+    _setIslandLodState(k, isFar);
   }
+
   needsUpdate = true;
 }
 

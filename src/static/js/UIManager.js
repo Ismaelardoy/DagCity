@@ -5,7 +5,7 @@ import { State } from './State.js';
 import {
   meshes, nodeMeshMap, edgeObjs, nodeMap,
   applySelection, applyBlastRadius, resetSelection, tweenCamera, updateFires, rebuildCity, flyToNode, flyToNodeNoSelect,
-  makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics, getRaycastTargets, zoomToFitAll, GLOBAL_VIEW_FLIGHT_MS
+  makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics, getRaycastTargets, zoomToFitAll, GLOBAL_VIEW_FLIGHT_MS, flyToIsland, isGlobalViewMode
 } from './CityEngine.js';
 import { controls, camera, composer } from './Visualizer.js';
 import { aiClient } from './AIClient.js';
@@ -497,6 +497,8 @@ export function initSettings() {
       State.set('showParticles', checkVfx.checked);
     });
   }
+
+  syncFlySpeedControls();
 }
 
 function initArchitecturePanel() {
@@ -509,6 +511,7 @@ function initArchitecturePanel() {
   const archControls = document.getElementById('arch-swell-controls');
   const metricSelect = document.getElementById('select-swell-metric');
   const intensityInput = document.getElementById('input-swell-intensity');
+  const intensityNumberInput = document.getElementById('input-swell-intensity-number');
   const intensityVal = document.getElementById('val-swell-intensity');
   const intensityFill = document.getElementById('fill-swell-intensity');
   const warnInput = document.getElementById('input-warn-threshold');
@@ -702,6 +705,8 @@ function initArchitecturePanel() {
     });
   }
 
+  syncDataVolumeControls();
+
   if (metricSelect) {
     // Fallback to 'rows' if the saved metric was removed from the dropdown.
     const ALLOWED_METRICS = new Set(['rows', 'code_length', 'connections']);
@@ -742,10 +747,12 @@ function initArchitecturePanel() {
   }
 
   const syncIntensity = (raw) => {
-    const val = Math.max(0.5, Math.min(3.0, Number(raw) / 100));
+    const val = Math.max(0.5, Math.min(2.0, parseFloat(raw)));
     State.set('dataSwellIntensity', val);
     if (intensityVal) intensityVal.textContent = val.toFixed(1) + 'x';
-    if (intensityFill) intensityFill.style.width = ((val - 0.5) / 2.5 * 100) + '%';
+    if (intensityFill) intensityFill.style.width = ((val - 0.5) / 1.5 * 100) + '%';
+    if (intensityInput) intensityInput.value = val.toFixed(1);
+    if (intensityNumberInput) intensityNumberInput.value = val.toFixed(1);
   };
 
   const syncThresholdLegend = () => {
@@ -757,9 +764,21 @@ function initArchitecturePanel() {
   };
 
   if (intensityInput) {
-    intensityInput.value = String(Math.round((State.dataSwellIntensity || 1.0) * 100));
+    intensityInput.min = '0.5';
+    intensityInput.max = '2.0';
+    intensityInput.step = '0.1';
+    intensityInput.value = (Number(State.dataSwellIntensity) || 1.0).toFixed(1);
     syncIntensity(intensityInput.value);
     intensityInput.addEventListener('input', () => syncIntensity(intensityInput.value));
+  }
+
+  if (intensityNumberInput) {
+    intensityNumberInput.min = '0.5';
+    intensityNumberInput.max = '2.0';
+    intensityNumberInput.step = '0.1';
+    intensityNumberInput.value = (Number(State.dataSwellIntensity) || 1.0).toFixed(1);
+    intensityNumberInput.addEventListener('input', () => syncIntensity(intensityNumberInput.value));
+    intensityNumberInput.addEventListener('change', () => syncIntensity(intensityNumberInput.value));
   }
 
   const getMetricUnit = (metric) => {
@@ -848,10 +867,10 @@ function initArchitecturePanel() {
 function handleManualSLAInput(el, onSync) {
   if (!el) return;
   const parseValue = () => {
-    let val = parseInt(el.textContent.replace('s','').trim());
+    let val = parseFloat(el.textContent.replace('s','').trim());
     if (isNaN(val)) val = 0;
     val = Math.max(0, Math.min(1000, val));
-    onSync(val); el.textContent = val + 's'; el.blur();
+    onSync(val); el.textContent = val.toFixed(1) + 's'; el.blur();
   };
   el.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); parseValue(); }
@@ -1002,7 +1021,36 @@ function addNodeSLA(id) {
   document.getElementById('sla-node-results').innerHTML = '';
 }
 
+function syncFlySpeedControls() {
+  const input = document.getElementById('input-fly-speed');
+  const valEl = document.getElementById('val-fly-speed');
+  const fill = document.getElementById('fill-fly-speed');
+  const fly = Math.max(0.5, Math.min(8, Number(State.flySpeed) || 1));
+  const raw = Math.round(fly * 100);
+  if (input) input.value = String(raw);
+  if (valEl) valEl.textContent = fly.toFixed(1) + 'x';
+  if (fill) fill.style.width = ((raw - 50) / 750 * 100) + '%';
+}
+
+function syncDataVolumeControls() {
+  const checkDataVolume = document.getElementById('check-data-volume');
+  const archControls = document.getElementById('arch-swell-controls');
+  const metricSelect = document.getElementById('select-swell-metric');
+  const enabled = !!State.dataVolumeMode;
+  if (checkDataVolume) checkDataVolume.checked = enabled;
+  if (archControls) archControls.classList.toggle('hidden', !enabled);
+
+  if (metricSelect) {
+    const allowed = new Set(['rows', 'code_length', 'connections']);
+    const metric = allowed.has(State.dataSwellMetric) ? State.dataSwellMetric : 'rows';
+    if (metric !== State.dataSwellMetric) State.set('dataSwellMetric', metric);
+    metricSelect.value = metric;
+  }
+}
+
 export function loadSLAFromProject(graphData) {
+  syncFlySpeedControls();
+  syncDataVolumeControls();
   const sla = graphData._sla;
   if (!sla) return;
   State.userDefinedSLA = sla.global ?? 120;
@@ -1046,7 +1094,7 @@ window._onFlySpeed = (rawValue) => {
   const valEl = document.getElementById('val-fly-speed');
   const fill = document.getElementById('fill-fly-speed');
   if (valEl) valEl.textContent = val.toFixed(1) + 'x';
-  if (fill) fill.style.width = ((parseFloat(rawValue) - 50) / 250 * 100) + '%';
+  if (fill) fill.style.width = ((parseFloat(rawValue) - 50) / 750 * 100) + '%';
   State.set('flySpeed', val);
 };
 
@@ -1179,13 +1227,14 @@ async function loadProject(name) {
     }
     const data = await res.json();
     localStorage.setItem('dagcity_active_project', name);
+    localStorage.removeItem('dagcity_is_live');
     projectModal.classList.remove('open');
     const overlay = document.getElementById('awaiting-overlay');
     if (overlay.style.display !== 'none') await window._dzHideOverlay();
     rebuildCity(data, false);
     
     // Update HUD Sync Status
-    const source = data.metadata?.source || (data.saved ? 'offline' : 'live_sync');
+    const source = data?.metadata?.source || 'offline';
     updateSyncHUD(source);
 
     loadSLAFromProject(data);
@@ -1394,6 +1443,16 @@ export function initRaycaster(renderer, camera) {
     mouse.y = -(e.clientY/window.innerHeight)*2+1;
     raycaster.setFromCamera(mouse, camera);
     const hits = raycaster.intersectObjects(getRaycastTargets(), true);
+
+    // Priority: tactical ring click => fly directly to island.
+    for (const h of hits) {
+      const obj = h.object;
+      if (obj && obj.name === 'tacticalRing' && obj.userData?.islandKey) {
+        flyToIsland(obj.userData.islandKey);
+        return;
+      }
+    }
+
     let found = null;
     for (const h of hits) { found = findNodeInHierarchy(h.object); if(found) break; }
     if (found) {
@@ -1404,6 +1463,9 @@ export function initRaycaster(renderer, camera) {
         return;
       }
       applySelection(found); openSidebar(found);
+      if (isGlobalViewMode() && found.group) {
+        flyToIsland(found.group);
+      }
       const m = nodeMeshMap[found.id];
       if (m) {
         if (!State.selectedNode) {
@@ -1453,15 +1515,17 @@ export function initSLA() {
   const globalVal   = document.getElementById('sla-global-val');
 
   const syncGlobal = val => {
-    State.userDefinedSLA = val;
-    if (globalInput) globalInput.value = val;
-    if (globalFill) globalFill.style.width = Math.round((val/1000)*100) + '%';
-    if (globalVal) globalVal.textContent  = val + 's';
+    const parsed = Math.max(0, Math.min(1000, Number(val) || 0));
+    State.userDefinedSLA = parsed;
+    if (globalInput) globalInput.value = parsed.toFixed(1);
+    if (globalFill) globalFill.style.width = Math.round((parsed/1000)*100) + '%';
+    if (globalVal) globalVal.textContent  = parsed.toFixed(1) + 's';
     updateFires(); saveSLAToProject();
   };
 
   if (globalInput) {
-    globalInput.addEventListener('input', () => syncGlobal(parseInt(globalInput.value)));
+    globalInput.step = '0.1';
+    globalInput.addEventListener('input', () => syncGlobal(parseFloat(globalInput.value)));
   }
   if (globalVal) handleManualSLAInput(globalVal, syncGlobal);
 

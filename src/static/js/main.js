@@ -193,7 +193,17 @@ window.addEventListener('dagcity:sync-source', (ev) => {
 // ── 2b. Graphics quality: bind slider + apply persisted state ─
 // Single source of truth: setGraphicsQuality. Slider input AND boot use the
 // exact same function. No other code path touches renderer/composer for graphics.
-const savedGraphics = localStorage.getItem('dagcity_graphics') || '1';
+let savedGraphics = '1';
+try {
+  const stored = localStorage.getItem('dagcity_graphics');
+  if (stored === '0' || stored === '1') {
+    savedGraphics = stored;
+  } else {
+    savedGraphics = State.graphicsMode === 'low' ? '0' : '1';
+  }
+} catch (_) {
+  savedGraphics = State.graphicsMode === 'low' ? '0' : '1';
+}
 const graphicsSlider = document.getElementById('graphics-slider');
 if (graphicsSlider) {
   graphicsSlider.value = savedGraphics;
@@ -207,20 +217,7 @@ setGraphicsQuality(savedGraphics);
 // User-controlled camera.far. Read at boot from localStorage (handled inside
 // CityEngine.setUserRenderDistance), bound to UI slider here, and applied to
 // the camera immediately so it takes effect on the very first frame.
-const rdSlider = document.getElementById('render-distance-slider');
-const rdValEl = document.getElementById('render-distance-val');
-const initialRD = getUserRenderDistance();
-if (rdSlider) {
-  rdSlider.value = String(initialRD);
-  rdSlider.addEventListener('input', (e) => {
-    const v = parseInt(e.target.value, 10) || 2500;
-    setUserRenderDistance(v);
-    if (rdValEl) rdValEl.textContent = String(v);
-  });
-}
-if (rdValEl) rdValEl.textContent = String(initialRD);
-// Apply once so camera.far matches the slider on boot.
-setUserRenderDistance(initialRD);
+setUserRenderDistance(Infinity);
 
 // Apply other persisted settings via the legacy bridge (labels/particles/neon)
 if (typeof window.applySettingsToEngine === 'function') {
