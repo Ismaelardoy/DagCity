@@ -97,6 +97,51 @@ export function initScene() {
     controls.minDistance    = 40;
     controls.maxDistance    = 1400;
     controls.enablePan      = true;
+    
+    // Drone Camera Controls
+    controls.screenSpacePanning = true; // Enable vertical panning
+    controls.maxPolarAngle = Math.PI / 2 - 0.05; // Prevent camera from going below ground (~85°)
+    
+    // Keyboard elevation controls
+    let elevationSpeed = 10;
+    document.addEventListener('keydown', (e) => {
+      if (!controls) return;
+      
+      if (e.code === 'Space') {
+        e.preventDefault();
+        // Elevate camera and target
+        const elevation = 15;
+        camera.position.y += elevation;
+        controls.target.y += elevation;
+        controls.update();
+      } else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+        e.preventDefault();
+        // Lower camera and target
+        const elevation = -15;
+        camera.position.y = Math.max(10, camera.position.y + elevation);
+        controls.target.y = Math.max(0, controls.target.y + elevation);
+        controls.update();
+      }
+    });
+    
+    // Auto-elevation on zoom out
+    let lastDistance = controls.getDistance();
+    controls.addEventListener('change', () => {
+      const currentDistance = controls.getDistance();
+      if (currentDistance > lastDistance + 50) {
+        // Zoomed out significantly
+        const elevationFactor = (currentDistance - lastDistance) * 0.1;
+        controls.target.y = Math.max(0, controls.target.y + elevationFactor);
+        lastDistance = currentDistance;
+      } else if (currentDistance < lastDistance - 50) {
+        // Zoomed in significantly
+        const elevationFactor = (lastDistance - currentDistance) * 0.05;
+        controls.target.y = Math.max(0, controls.target.y - elevationFactor);
+        lastDistance = currentDistance;
+      }
+    });
+    
+    console.log('[Visualizer] Drone Camera controls enabled');
   } else {
     console.warn('[Visualizer] OrbitControls not found. Camera navigation might be limited.');
   }

@@ -433,7 +433,12 @@ class DashboardManager {
 
   _setDockVisible(visible) {
     const dock = document.getElementById('ide-dock');
-    if (dock) dock.style.display = visible ? '' : 'none';
+    if (dock) {
+      dock.style.display = visible ? 'block' : 'none';
+      console.log('[DashboardManager] Dock visibility set to:', visible, 'display:', dock.style.display);
+    } else {
+      console.error('[DashboardManager] Dock element not found');
+    }
   }
 
   // Return to dashboard from 3D view

@@ -145,17 +145,23 @@ class ManifestParser:
                 return parsed
         return 0
 
-    def _determine_island_group(self, res_type: str, package_name: str, file_path: str, fqn: List[str], root_project_name: str) -> str:
+    def _determine_island_group(self, res_type: str, package_name: str, file_path: str, fqn: List[str], root_project_name: str, name: str, layer: str) -> str:
         """
         Hybrid Grouping System: Adapts to different dbt architectures (packages vs monoliths).
         
+        REGLA 0 (Marts): Si layer es 'mart', la isla es "MARTS".
         REGLA 1 (Fuentes y Seeds): Si resource_type es 'source', la isla es "SOURCES". Si es 'seed', la isla es "SEEDS".
         REGLA 2 (Paquetes Externos): Si package_name != root_project_name, la isla es el nombre del paquete en mayúsculas.
         REGLA 3 (Carpetas - Para Monolitos): Si package_name == root_project_name, agrupa por estructura de carpetas.
         REGLA 4 (Fallback): Si la ruta no tiene subcarpetas claras, asígnalo a "CORE".
         """
-        print(f"[DEBUG HYBRID] res_type={res_type}, package_name={package_name}, root_project_name={root_project_name}")
+        print(f"[DEBUG HYBRID] res_type={res_type}, package_name={package_name}, root_project_name={root_project_name}, name={name}, layer={layer}")
         print(f"[DEBUG HYBRID] file_path={file_path}, fqn={fqn}")
+        
+        # REGLA 0: Marts (después de Topological Catch-All)
+        if layer == 'mart':
+            print("[DEBUG HYBRID] Rule 0: MARTS")
+            return "MARTS"
         
         # REGLA 1: Sources y Seeds
         if res_type == 'source':
@@ -282,8 +288,8 @@ class ManifestParser:
                             or self.LAYER_PALETTE["default"])
 
             # Determine island group using hybrid grouping system
-            island_group = self._determine_island_group(res_type, package_name, file_path, fqn, root_project_name)
-            print(f"[DEBUG] Node: {name}, package: {package_name}, root: {root_project_name}, file_path: {file_path}, fqn: {fqn}, island: {island_group}")
+            island_group = self._determine_island_group(res_type, package_name, file_path, fqn, root_project_name, name, layer)
+            print(f"[DEBUG] Node: {name}, package: {package_name}, root: {root_project_name}, file_path: {file_path}, fqn={fqn}, layer={layer}, island: {island_group}")
 
             # Execution time: ONLY real values from run_results.json. If absent,
             # we keep 0 (the JS layer treats 0 as "no data" and falls back to
@@ -349,7 +355,15 @@ class ManifestParser:
 
             # Topological Catch-All for root models
             if n["layer"] == "unclassified":
-                if len(n["downstream"]) > 0:
+                # Check if node receives from intermediate and has no downstreams
+                hasIntermediateUpstream = any(
+                    parsed_nodes.get(uid, {}).get("layer") == "intermediate"
+                    for uid in n["upstream"]
+                )
+
+                if hasIntermediateUpstream and len(n["downstream"]) == 0:
+                    n["layer"] = "mart"
+                elif len(n["downstream"]) > 0:
                     n["layer"] = "intermediate"
                 else:
                     n["layer"] = "mart"
@@ -363,6 +377,12 @@ class ManifestParser:
             # If Staging or Intermediate but NO consumers -> Dead End
             if n["layer"] in ("staging", "intermediate") and len(n["downstream"]) == 0:
                 n["is_dead_end"] = True
+
+        # Phase 5: Reassign groups for MARTS (after Topological Catch-All)
+        for n in parsed_nodes.values():
+            if n["layer"] == "mart":
+                n["group"] = "MARTS"
+                print(f"[DEBUG MARTS] Reassigned {n['name']} to MARTS")
 
         return {
             "metadata": {

@@ -235,6 +235,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   transition: width 0.3s cubic-bezier(0.4,0,0.2,1);
   user-select: none;
   z-index: 1000;
+  display: block;
 }
 
 .dock-section { display: flex; flex-direction: column; gap: 20px; padding: 20px 0; }
@@ -862,6 +863,15 @@ input:checked + .slider:before { transform: translateX(21px); background-color: 
 .sb-stat {
   background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
   border-radius: 12px; padding: 20px 14px; text-align: center;
+}
+.clickable-stat {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.clickable-stat:hover {
+  background: rgba(0,242,255,0.1);
+  border-color: rgba(0,242,255,0.5);
+  box-shadow: 0 0 15px rgba(0,242,255,0.3);
 }
 .sb-stat .val { display: block; font-size: 2.6rem; font-weight: bold; color: #fff; line-height: 1; }
 .sb-stat .lbl { font-size: 15px; color: #ffffff66; text-transform: uppercase; letter-spacing: 1px; margin-top: 8px; }
@@ -1943,7 +1953,11 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
   <div style="color:rgba(255,255,255,0.2)">•</div>
   <div class="hud-item"><span class="hud-icon">🎡</span> <span class="hud-label">SCROLL</span> → ZOOM</div>
   <div style="color:rgba(255,255,255,0.2)">•</div>
-  <div class="hud-item"><span class="hud-icon">👆</span> <span class="hud-label">SELECT</span> → INSPECT</div>
+  <div class="hud-item"><span class="hud-icon">�</span> <span class="hud-label">␣ SPACE</span> → ELEVATE</div>
+  <div style="color:rgba(255,255,255,0.2)">•</div>
+  <div class="hud-item"><span class="hud-icon">⬇️</span> <span class="hud-label">⇧ SHIFT</span> → DESCEND</div>
+  <div style="color:rgba(255,255,255,0.2)">•</div>
+  <div class="hud-item"><span class="hud-icon">��</span> <span class="hud-label">SELECT</span> → INSPECT</div>
 </div>
 
 <!-- Live sync / offline indicator (under #stats, bottom-right) -->

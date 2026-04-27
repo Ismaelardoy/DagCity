@@ -2258,6 +2258,122 @@ export function updateFires() {
 }
 
 // ── Selection ──────────────────────────────────────────
+// ── Focus Mode: Detect nearest island to camera ─────────────
+let nearestIsland = null;
+
+function updateNearestIsland() {
+  if (!camera || !islandMeta) {
+    nearestIsland = null;
+    return;
+  }
+
+  let nearestDist = Infinity;
+  let nearestKey = null;
+
+  for (const key in islandMeta) {
+    const meta = islandMeta[key];
+    if (!meta || !meta.center) continue;
+
+    const dist = Math.sqrt(
+      Math.pow(camera.position.x - meta.center.x, 2) +
+      Math.pow(camera.position.z - meta.center.z, 2)
+    );
+
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearestKey = key;
+    }
+  }
+
+  // Only consider island as "nearest" if within reasonable distance
+  const newNearestIsland = nearestDist < 400 ? nearestKey : null;
+  
+  if (newNearestIsland !== nearestIsland) {
+    console.log('[CityEngine] Nearest island changed:', nearestIsland, '->', newNearestIsland, '(distance:', nearestDist.toFixed(0), ')');
+    nearestIsland = newNearestIsland;
+  }
+}
+
+// Update nearest island on camera movement
+if (controls) {
+  controls.addEventListener('change', () => {
+    updateNearestIsland();
+    // Apply island-based filtering when not in node selection mode
+    if (!State.selectedNode) {
+      applyIslandFilter();
+    }
+  });
+}
+
+function applyIslandFilter() {
+  if (!nearestIsland) {
+    // Restore all edges when no island is nearby
+    edgeObjs.forEach(e => {
+      e.line.material.opacity = e.isInterIsland ? 0.8 : 0.45;
+      e.line.material.color.set(e.isInterIsland ? 0xffdf00 : 0x0a3344);
+      e.line.renderOrder = 0;
+      if (e.arrows && Array.isArray(e.arrows)) {
+        const arrowOpacity = e.line.material.opacity;
+        e.arrows.forEach(arrow => {
+          arrow.line.material.opacity = arrowOpacity;
+          arrow.cone.material.opacity = arrowOpacity;
+          arrow.line.material.color.copy(e.line.material.color);
+          arrow.cone.material.color.copy(e.line.material.color);
+          arrow.visible = arrowOpacity > 0.01;
+        });
+      }
+    });
+    return;
+  }
+
+  // Calculate connected islands - islands that have direct connections to nearestIsland
+  const connectedIslands = new Set();
+  connectedIslands.add(nearestIsland);
+  edgeObjs.forEach(e => {
+    const srcNode = nodeMap[e.src];
+    const tgtNode = nodeMap[e.tgt];
+    const srcGroup = srcNode?.group || 'default';
+    const tgtGroup = tgtNode?.group || 'default';
+    
+    // Add islands directly connected to nearestIsland
+    if (srcGroup === nearestIsland && e.isInterIsland) {
+      connectedIslands.add(tgtGroup);
+    }
+    if (tgtGroup === nearestIsland && e.isInterIsland) {
+      connectedIslands.add(srcGroup);
+    }
+  });
+
+  // Filter edges - only show inter-island edges that connect connectedIslands
+  edgeObjs.forEach(e => {
+    const srcNode = nodeMap[e.src];
+    const tgtNode = nodeMap[e.tgt];
+    const srcGroup = srcNode?.group || 'default';
+    const tgtGroup = tgtNode?.group || 'default';
+    
+    // For inter-island edges, show only if both islands are in connectedIslands
+    const islandsConnected = e.isInterIsland 
+      ? (connectedIslands.has(srcGroup) && connectedIslands.has(tgtGroup))
+      : true;
+    
+    const shouldShow = islandsConnected;
+    
+    e.line.material.opacity = shouldShow ? (e.isInterIsland ? 0.8 : 1.0) : (e.isInterIsland ? 0.0 : 0.45);
+    e.line.material.color.set(shouldShow ? (e.isInterIsland ? 0xffdf00 : 0x0a3344) : 0x0a1114);
+    e.line.renderOrder = shouldShow ? 10 : 0;
+    if (e.arrows && Array.isArray(e.arrows)) {
+      const arrowOpacity = e.line.material.opacity;
+      e.arrows.forEach(arrow => {
+        arrow.line.material.opacity = arrowOpacity;
+        arrow.cone.material.opacity = arrowOpacity;
+        arrow.line.material.color.copy(e.line.material.color);
+        arrow.cone.material.color.copy(e.line.material.color);
+        arrow.visible = arrowOpacity > 0.01;
+      });
+    }
+  });
+}
+
 export function applySelection(node) {
   const blastMode = !!State.blastRadiusSourceId && Array.isArray(State.blastRadiusIds) && State.blastRadiusIds.length > 0;
   const blastSet = blastMode ? new Set(State.blastRadiusIds) : new Set();
@@ -2282,6 +2398,29 @@ export function applySelection(node) {
       descSet = sets.descendants;
       critSet = new Set([...ancSet, ...descSet]);
     }
+  }
+
+  // Calculate connected islands for Focus Mode (only for proximity mode, not node selection)
+  const connectedIslands = new Set();
+  const focusIsland = focusNode ? (focusNode.group || 'default') : nearestIsland;
+  
+  if (focusIsland && !focusNode) {
+    // Only calculate connected islands when in proximity mode (no node selected)
+    connectedIslands.add(focusIsland);
+    edgeObjs.forEach(e => {
+      const srcNode = nodeMap[e.src];
+      const tgtNode = nodeMap[e.tgt];
+      const srcGroup = srcNode?.group || 'default';
+      const tgtGroup = tgtNode?.group || 'default';
+      
+      // Add islands directly connected to the focus island
+      if (srcGroup === focusIsland && e.isInterIsland) {
+        connectedIslands.add(tgtGroup);
+      }
+      if (tgtGroup === focusIsland && e.isInterIsland) {
+        connectedIslands.add(srcGroup);
+      }
+    });
   }
 
   meshes.forEach(m => {
@@ -2316,13 +2455,25 @@ export function applySelection(node) {
       ? (blastSet.has(e.src) && blastSet.has(e.tgt))
       : (focusNode ? (e.src === focusNode.id || e.tgt === focusNode.id) : true);
     
+    // Focus Mode: For inter-island edges, also check if islands are connected
+    const srcNode = nodeMap[e.src];
+    const tgtNode = nodeMap[e.tgt];
+    const srcGroup = srcNode?.group || 'default';
+    const tgtGroup = tgtNode?.group || 'default';
+    const islandsConnected = connectedIslands.has(srcGroup) && connectedIslands.has(tgtGroup);
+    
     const ghostColor = new THREE.Color(0x0a1114);
     const blastColor = new THREE.Color(0xff4400);
     const defaultColor = new THREE.Color(e.isInterIsland ? 0xffdf00 : 0x0a3344);
     
-    e.line.material.opacity   = focusNode ? (inPath ? (e.isInterIsland ? 0.8 : 1.0) : (blastMode ? 0.0 : 0.0)) : (e.isInterIsland ? 0.8 : 0.45);
-    e.line.material.color.copy(focusNode ? (inPath ? (blastMode ? blastColor : highlightColor) : ghostColor) : defaultColor);
-    e.line.renderOrder = inPath ? 10 : 0;
+    // Focus Mode: Hide edges completely if they don't touch the focus node or connected islands
+    const shouldShow = focusNode 
+      ? (inPath || (e.isInterIsland && islandsConnected)) 
+      : true;
+    
+    e.line.material.opacity   = focusNode ? (shouldShow ? (e.isInterIsland ? 0.8 : 1.0) : 0.0) : (e.isInterIsland ? 0.8 : 0.45);
+    e.line.material.color.copy(focusNode ? (shouldShow ? (blastMode ? blastColor : highlightColor) : ghostColor) : defaultColor);
+    e.line.renderOrder = shouldShow ? 10 : 0;
     if (e.arrows && Array.isArray(e.arrows)) {
       const arrowOpacity = e.line.material.opacity;
       e.arrows.forEach(arrow => {
@@ -3761,16 +3912,205 @@ export function rebuildCity(graphData, isLiveSync = false) {
   minTime = nodes.length ? Math.min(...nodes.map(n => n.execution_time || 0)) : 0;
   hasReal = graphData.metadata?.has_real_times || false;
 
+  // ── Smart Clustering Consolidation ───────────────────────
+  // Count nodes per group
+  const groupCounts = {};
+  nodes.forEach(n => {
+    const group = n.group || 'default';
+    groupCounts[group] = (groupCounts[group] || 0) + 1;
+  });
+
+  console.log('[CityEngine] Group counts before consolidation:', Object.entries(groupCounts).map(([g, c]) => `${g}: ${c}`));
+
+  // Reassign nodes from small groups (< 3 nodes) to CORE_UTILITIES
+  let reassignedCount = 0;
+  nodes.forEach(n => {
+    const group = n.group || 'default';
+    if (groupCounts[group] < 3) {
+      n.group = 'CORE_UTILITIES';
+      reassignedCount++;
+    }
+  });
+
+  console.log('[CityEngine] Consolidated', reassignedCount, 'nodes to CORE_UTILITIES');
+
+  // ── Slotting System for Uniform Angular Distribution ───────
+  // Get unique projects after consolidation
   const projects = [...new Set(nodes.map(n => n.group || 'default'))];
+  const N = projects.length;
+
+  // Calculate connection weight (inDegree + outDegree) for each island
+  const islandConnections = {};
+  projects.forEach(p => {
+    islandConnections[p] = { inDegree: 0, outDegree: 0, total: 0 };
+  });
+
+  links.forEach(link => {
+    const sourceGroup = nodes.find(n => n.id === link.source)?.group || 'default';
+    const targetGroup = nodes.find(n => n.id === link.target)?.group || 'default';
+    if (islandConnections[sourceGroup]) {
+      islandConnections[sourceGroup].outDegree++;
+      islandConnections[sourceGroup].total++;
+    }
+    if (islandConnections[targetGroup]) {
+      islandConnections[targetGroup].inDegree++;
+      islandConnections[targetGroup].total++;
+    }
+  });
+
+  console.log('[CityEngine] Island connections:', Object.entries(islandConnections).map(([g, c]) => `${g}: ${c.total}`));
+
+  // Identify poles
+  const sourcesIsland = projects.find(p => p.toUpperCase() === 'SOURCES') || projects.find(p => p.toUpperCase() === 'SEEDS');
+  const martsIsland = projects.find(p => p.toUpperCase().includes('MART') || p.toUpperCase() === 'AD_REPORTING');
+
+  console.log('[CityEngine] Poles - Sources:', sourcesIsland, 'Marts:', martsIsland);
+
+  // Identify Group A (neighbors of SOURCES) and Group B (neighbors of MARTS)
+  const groupA = []; // Neighbors of SOURCES
+  const groupB = []; // Neighbors of MARTS
+  const groupC = []; // Others
+
+  projects.forEach(p => {
+    if (p === sourcesIsland || p === martsIsland) return;
+
+    const hasSourceConnection = links.some(link => {
+      const sourceGroup = nodes.find(n => n.id === link.source)?.group || 'default';
+      const targetGroup = nodes.find(n => n.id === link.target)?.group || 'default';
+      const result = (sourceGroup === p && targetGroup === sourcesIsland) ||
+                    (targetGroup === p && sourceGroup === sourcesIsland);
+      if (result) {
+        console.log(`[DEBUG] Link between ${p} and SOURCES: ${sourceGroup} -> ${targetGroup}`);
+      }
+      return result;
+    });
+
+    const hasMartConnection = links.some(link => {
+      const sourceGroup = nodes.find(n => n.id === link.source)?.group || 'default';
+      const targetGroup = nodes.find(n => n.id === link.target)?.group || 'default';
+      const result = (sourceGroup === p && targetGroup === martsIsland) ||
+                    (targetGroup === p && sourceGroup === martsIsland);
+      if (result) {
+        console.log(`[DEBUG] Link between ${p} and MARTS: ${sourceGroup} -> ${targetGroup}`);
+      }
+      return result;
+    });
+
+    if (hasSourceConnection) {
+      groupA.push({ island: p, connections: islandConnections[p].total });
+    } else if (hasMartConnection) {
+      groupB.push({ island: p, connections: islandConnections[p].total });
+    } else {
+      groupC.push(p);
+    }
+  });
+
+  // Sort Group A and Group B by descending connections
+  groupA.sort((a, b) => b.connections - a.connections);
+  groupB.sort((a, b) => b.connections - a.connections);
+
+  console.log('[CityEngine] Group A (neighbors of SOURCES):', groupA.map(n => `${n.island} (${n.connections})`));
+  console.log('[CityEngine] Group B (neighbors of MARTS):', groupB.map(n => `${n.island} (${n.connections})`));
+  console.log('[CityEngine] Group C (others):', groupC);
+
+  // Prepare ringSlots array
+  const ringSlots = new Array(N).fill(null);
+
+  // Assign SOURCES to slot[0]
+  if (sourcesIsland) {
+    ringSlots[0] = sourcesIsland;
+    console.log('[CityEngine] SOURCES assigned to slot[0]');
+  }
+
+  // Distribute Group A alternately around slot[0]
+  let leftIndex = 1;
+  let rightIndex = N - 1;
+  groupA.forEach((neighbor, i) => {
+    if (i % 2 === 0) {
+      // Even index: assign to right side
+      ringSlots[rightIndex] = neighbor.island;
+      console.log(`[CityEngine] ${neighbor.island} assigned to slot[${rightIndex}]`);
+      rightIndex--;
+    } else {
+      // Odd index: assign to left side
+      ringSlots[leftIndex] = neighbor.island;
+      console.log(`[CityEngine] ${neighbor.island} assigned to slot[${leftIndex}]`);
+      leftIndex++;
+    }
+  });
+
+  // Assign MARTS to slot[martIndex]
+  const martIndex = Math.floor(N / 2);
+  if (martsIsland) {
+    ringSlots[martIndex] = martsIsland;
+    console.log(`[CityEngine] MARTS assigned to slot[${martIndex}]`);
+  }
+
+  // Distribute Group B alternately around martIndex
+  let martLeftIndex = martIndex - 1;
+  let martRightIndex = martIndex + 1;
+  groupB.forEach((neighbor, i) => {
+    if (i % 2 === 0) {
+      // Even index: assign to left side of mart
+      while (martLeftIndex >= 0 && ringSlots[martLeftIndex] !== null) {
+        martLeftIndex--;
+      }
+      if (martLeftIndex >= 0) {
+        ringSlots[martLeftIndex] = neighbor.island;
+        console.log(`[CityEngine] ${neighbor.island} assigned to slot[${martLeftIndex}]`);
+        martLeftIndex--;
+      }
+    } else {
+      // Odd index: assign to right side of mart
+      while (martRightIndex < N && ringSlots[martRightIndex] !== null) {
+        martRightIndex++;
+      }
+      if (martRightIndex < N) {
+        ringSlots[martRightIndex] = neighbor.island;
+        console.log(`[CityEngine] ${neighbor.island} assigned to slot[${martRightIndex}]`);
+        martRightIndex++;
+      }
+    }
+  });
+
+  // Fill remaining slots with Group C
+  let groupCIndex = 0;
+  for (let i = 0; i < N; i++) {
+    if (ringSlots[i] === null && groupCIndex < groupC.length) {
+      ringSlots[i] = groupC[groupCIndex];
+      console.log(`[CityEngine] ${groupC[groupCIndex]} assigned to slot[${i}]`);
+      groupCIndex++;
+    }
+  }
+
+  console.log('[CityEngine] Final ringSlots:', ringSlots);
+
+  // Calculate angles: i * (2 * Math.PI / N)
   const projectCenters = {};
   const radius = projects.length > 1 ? Math.max(600, projects.length * 300) : 0;
-  projects.forEach((p, i) => {
-    const angle = (i / projects.length) * Math.PI * 2;
-    projectCenters[p] = {
-      dx: projects.length > 1 ? Math.cos(angle) * radius : 0,
-      dz: projects.length > 1 ? Math.sin(angle) * radius : 0
-    };
-    
+  const uniformAngleStep = (Math.PI * 2) / N;
+
+  console.log('[CityEngine] Uniform angle step:', uniformAngleStep.toFixed(3), 'rad', `(${(uniformAngleStep * 180 / Math.PI).toFixed(1)}°)`);
+
+  ringSlots.forEach((island, i) => {
+    if (island) {
+      const angle = i * uniformAngleStep;
+      
+      projectCenters[island] = {
+        dx: Math.cos(angle) * radius,
+        dz: Math.sin(angle) * radius
+      };
+      
+      console.log(`[CityEngine] ${island} at slot[${i}] angle ${angle.toFixed(3)} rad (${(angle * 180 / Math.PI).toFixed(1)}°)`);
+    }
+  });
+  
+  console.log('[CityEngine] Final project centers:', Object.keys(projectCenters));
+  
+  const orderedProjects = Object.keys(projectCenters); // For label rendering
+  
+  // Render island labels
+  orderedProjects.forEach((p, i) => {
     const labelSprite = makeSprite(`ISLAND: ${p.toUpperCase()}`, '#ffdf00');
     labelSprite.name = 'islandLabel';
     labelSprite.userData.islandKey = p;

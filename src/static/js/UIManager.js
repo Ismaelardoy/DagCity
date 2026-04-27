@@ -18,6 +18,7 @@ const DANGER_THRESHOLD = 5;
 // ── Sidebar ────────────────────────────────────────────
 const sidebar   = document.getElementById('sidebar');
 const sbContent = document.getElementById('sb-content');
+let originalNode = null; // Store original node when navigating from lists
 
 let isSlaPanelOpen = false;
 let isSettingsOpen = false;
@@ -96,6 +97,11 @@ function setAutoRotateEnabled(enabled, shouldAnimate = true) {
 }
 
 export function openSidebar(n) {
+  // Clear originalNode when opening sidebar directly (not from list navigation)
+  if (!originalNode) {
+    // This is a direct selection, not from list navigation
+  }
+  
   const cols      = n.columns || [];
   const isBN      = n.is_bottleneck;
   const statusCol = isBN ? '#ff4400' : '#39ff14';
@@ -130,6 +136,11 @@ export function openSidebar(n) {
   }, 0);
 
   sbContent.innerHTML = `
+    ${originalNode ? `
+      <button id="btn-back-to-original" style="background:linear-gradient(90deg,#00f2ff,#00c8d4);border:none;border-radius:8px;color:#000;padding:8px 12px;font-size:11px;letter-spacing:1px;cursor:pointer;font-weight:bold;box-shadow:0 0 12px rgba(0,242,255,0.35);margin-bottom:15px;">
+        ← BACK TO ${originalNode.name.substring(0, 20)}${originalNode.name.length > 20 ? '...' : ''}
+      </button>
+    ` : ''}
     <div class="sb-node-name" style="color:${n.color}">${n.name}</div>
     <div class="sb-path" title="Unique ID">${n.id}</div>
     <div class="sb-file-path" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#888;margin-bottom:15px;word-break:break-all;border-left:2px solid ${n.color};padding-left:8px;">
@@ -157,11 +168,13 @@ export function openSidebar(n) {
     </div>
     <div class="sb-section-title">// STATISTICS</div>
     <div class="sb-grid">
-      <div class="sb-stat"><span class="val">${(n.upstream||[]).length}</span><span class="lbl">Upstream</span></div>
-      <div class="sb-stat"><span class="val">${(n.downstream||[]).length}</span><span class="lbl">Downstream</span></div>
+      <div class="sb-stat clickable-stat" id="stat-upstream" title="Click to view upstream nodes"><span class="val">${(n.upstream||[]).length}</span><span class="lbl">Upstream</span></div>
+      <div class="sb-stat clickable-stat" id="stat-downstream" title="Click to view downstream nodes"><span class="val">${(n.downstream||[]).length}</span><span class="lbl">Downstream</span></div>
       <div class="sb-stat"><span class="val">${cols.length||'—'}</span><span class="lbl">Columns</span></div>
       <div class="sb-stat"><span class="val">${(n.upstream||[]).length+(n.downstream||[]).length}</span><span class="lbl">Total Deps</span></div>
     </div>
+    <div id="upstream-list" style="display:none;margin-bottom:14px;max-height:150px;overflow-y:auto;border:1px solid rgba(0,242,255,0.25);border-radius:8px;background:rgba(0,0,0,0.35);padding:6px 4px;"></div>
+    <div id="downstream-list" style="display:none;margin-bottom:14px;max-height:150px;overflow-y:auto;border:1px solid rgba(0,242,255,0.25);border-radius:8px;background:rgba(0,0,0,0.35);padding:6px 4px;"></div>
     ${(() => {
       // ── Dynamic danger tiering ──────────────────────────
       const isCritical = impactedCount >= DANGER_THRESHOLD || exposureCount > 0;
@@ -208,6 +221,114 @@ export function openSidebar(n) {
     document.querySelectorAll('#col-list .col-row').forEach(r => { r.style.display = r.dataset.col.includes(q) ? 'flex' : 'none'; });
   });
 
+  // ── Upstream/Downstream clickable lists ─────────────────────
+  const upstreamStat = document.getElementById('stat-upstream');
+  const downstreamStat = document.getElementById('stat-downstream');
+  const upstreamList = document.getElementById('upstream-list');
+  const downstreamList = document.getElementById('downstream-list');
+
+  // Helper to render node list
+  const renderNodeList = (nodeIds, listEl, listType) => {
+    const items = nodeIds
+      .map(id => ({ id, node: nodeMap[id] }))
+      .filter(x => x.node)
+      .sort((a, b) => String(a.node.name).localeCompare(String(b.node.name)));
+
+    const TAG_STYLES = {
+      model:    { label: 'MODEL',              color: '#7ad7ff' },
+      seed:     { label: 'SEED',               color: '#7fff9d' },
+      source:   { label: 'SOURCE',             color: '#c8a8ff' },
+      snapshot: { label: 'SNAPSHOT',           color: '#ffd86b' },
+      exposure: { label: 'EXPOSURE / DASHBOARD', color: '#ff7a44' },
+      metric:   { label: 'METRIC',             color: '#ff66c4' },
+    };
+    const tagFor = (rt) => {
+      const t = TAG_STYLES[String(rt || '').toLowerCase()];
+      return t || { label: 'NODE', color: '#888' };
+    };
+
+    listEl.innerHTML =
+      '<style>' +
+      `#${listEl.id}::-webkit-scrollbar{width:6px;}` +
+      `#${listEl.id}::-webkit-scrollbar-track{background:transparent;}` +
+      `#${listEl.id}::-webkit-scrollbar-thumb{background:#00f2ff;border-radius:4px;box-shadow:0 0 6px rgba(0,242,255,0.6);}` +
+      `#${listEl.id}::-webkit-scrollbar-thumb:hover{background:#00c8d4;}` +
+      `#${listEl.id}{scrollbar-width:thin;scrollbar-color:#00f2ff transparent;}` +
+      '</style>' +
+      (items.length ? items.map(({ id, node }) => {
+        const tag = tagFor(node.resource_type);
+        return `<div class="dep-item" data-node-id="${id}" style="padding:8px 12px;font-size:14px;color:#c8f0ff;cursor:pointer;border-radius:6px;letter-spacing:0.3px;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:all 0.15s;">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${node.name}</span>
+          <span style="color:${tag.color};font-size:10px;letter-spacing:1.5px;font-weight:700;flex-shrink:0;">${tag.label}</span>
+        </div>`;
+      }).join('') : `<div style="padding:8px;color:#888;font-size:11px;">No ${listType} nodes.</div>`);
+
+    // Hover + click bindings
+    listEl.querySelectorAll('.dep-item').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        el.style.background = 'rgba(0,242,255,0.18)';
+        el.style.color = '#fff';
+        el.style.boxShadow = '0 0 10px rgba(0,242,255,0.35)';
+      });
+      el.addEventListener('mouseleave', () => {
+        el.style.background = 'transparent';
+        el.style.color = '#c8f0ff';
+        el.style.boxShadow = 'none';
+      });
+      el.addEventListener('click', () => {
+        const id = el.getAttribute('data-node-id');
+        // Store original node before navigating
+        if (!originalNode) {
+          originalNode = n;
+        }
+        // Camera-only fly to the new node. Does NOT change selection or open sidebar.
+        flyToNodeNoSelect(id);
+        // Re-render sidebar to show "Back to Original" button
+        openSidebar(n);
+      });
+    });
+  };
+
+  // Click handlers for upstream/downstream stats
+  if (upstreamStat) {
+    upstreamStat.style.cursor = 'pointer';
+    upstreamStat.addEventListener('click', () => {
+      const isHidden = upstreamList.style.display === 'none';
+      upstreamList.style.display = isHidden ? 'block' : 'none';
+      downstreamList.style.display = 'none';
+      if (isHidden) renderNodeList(n.upstream || [], upstreamList, 'upstream');
+    });
+  }
+
+  if (downstreamStat) {
+    downstreamStat.style.cursor = 'pointer';
+    downstreamStat.addEventListener('click', () => {
+      const isHidden = downstreamList.style.display === 'none';
+      downstreamList.style.display = isHidden ? 'block' : 'none';
+      upstreamList.style.display = 'none';
+      if (isHidden) renderNodeList(n.downstream || [], downstreamList, 'downstream');
+    });
+  }
+
+  // Back to Original button handler
+  const backBtn = document.getElementById('btn-back-to-original');
+  if (backBtn) {
+    // Remove existing listener to avoid duplicates
+    backBtn.replaceWith(backBtn.cloneNode(true));
+    const newBackBtn = document.getElementById('btn-back-to-original');
+    if (newBackBtn && originalNode) {
+      newBackBtn.addEventListener('click', () => {
+        if (originalNode && originalNode.id) {
+          const targetNode = originalNode;
+          originalNode = null; // Clear BEFORE opening sidebar
+          flyToNodeNoSelect(targetNode.id);
+          applySelection(targetNode);
+          openSidebar(targetNode);
+        }
+      });
+    }
+  }
+
   const blastBtn = document.getElementById('btn-show-blast');
   if (blastBtn) {
     blastBtn.addEventListener('click', () => {
@@ -245,11 +366,12 @@ export function openSidebar(n) {
         '#blast-affected-list::-webkit-scrollbar-thumb:hover{background:#ff7733;}' +
         '#blast-affected-list{scrollbar-width:thin;scrollbar-color:#ff5500 transparent;}' +
         '</style>' +
-        (items.length ? items.map(({ id, node }) => {
+        (items.length ? items.map(({ id, node }, index) => {
           const tag = tagFor(node.resource_type);
-          return `<div class="blast-aff-item" data-node-id="${id}" style="padding:6px 10px;font-size:12px;color:#ffd8c8;cursor:pointer;border-radius:6px;letter-spacing:0.3px;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:all 0.15s;">
+          return `<div class="blast-aff-item" data-node-id="${id}" style="padding:8px 12px;font-size:14px;color:#ffd8c8;cursor:pointer;border-radius:6px;letter-spacing:0.3px;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:all 0.15s;">
+            <span style="color:#ff4400;font-weight:bold;font-size:12px;margin-right:8px;">${index + 1}.</span>
             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${node.name}</span>
-            <span style="color:${tag.color};font-size:9px;letter-spacing:1.5px;font-weight:700;flex-shrink:0;">${tag.label}</span>
+            <span style="color:${tag.color};font-size:10px;letter-spacing:1.5px;font-weight:700;flex-shrink:0;">${tag.label}</span>
           </div>`;
         }).join('') : '<div style="padding:8px;color:#888;font-size:11px;">No affected nodes.</div>');
 
@@ -267,9 +389,15 @@ export function openSidebar(n) {
         });
         el.addEventListener('click', () => {
           const id = el.getAttribute('data-node-id');
+          // Store original node before navigating
+          if (!originalNode) {
+            originalNode = n;
+          }
           // Camera-only fly. Does NOT call applySelection / resetSelection,
           // so the blast highlight on the original source stays intact.
           flyToNodeNoSelect(id);
+          // Re-render sidebar to show "Back to Original" button
+          openSidebar(n);
         });
       });
     });
@@ -279,6 +407,7 @@ export function openSidebar(n) {
 export function closeSidebar() {
   sidebar.classList.remove('open');
   resetSelection();
+  originalNode = null; // Clear original node when closing sidebar
   // We no longer force autoRotate = true here.
 }
 
