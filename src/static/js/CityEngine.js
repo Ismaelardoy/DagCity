@@ -1575,6 +1575,8 @@ let isGlobalViewActive = false;
 // Snapshot of OrbitControls settings BEFORE Global View mutates them, so an
 // interrupt or completion can put the user back into their normal navigation.
 let _preGlobalViewControlsState = null;
+// Flag to prevent immediate interruption when global view is activated programmatically
+let _globalViewJustActivated = false;
 
 export function getUserRenderDistance() { return userRenderDistance; }
 
@@ -2423,7 +2425,7 @@ function _bindControlsInterruptHandler() {
       if (DRS) DRS.enabled = cinematicPrevDRSEnabled;
     }
     // 2. Exit Global View — keep infinite render distance + restore controls.
-    if (isGlobalViewActive) {
+    if (isGlobalViewActive && !_globalViewJustActivated) {
       isGlobalViewActive = false;
       if (islandJumpPanel) islandJumpPanel.style.display = 'none';
       if (camera) {
@@ -2761,6 +2763,8 @@ export function fitCameraToAll(durationMs = 1500) {
 }
 
 export function triggerGlobalView(durationMs = GLOBAL_VIEW_FLIGHT_MS) {
+  _globalViewJustActivated = true;
+  setTimeout(() => { _globalViewJustActivated = false; }, 2000);
   fitCameraToAll(durationMs);
 }
 
@@ -3908,6 +3912,14 @@ export function rebuildCity(graphData, isLiveSync = false) {
 
   // Initialize / refresh LOD after every rebuild.
   updateLOD();
+
+  // Auto-enter global view on initial project load (not live sync)
+  if (!isLiveSync) {
+    setTimeout(() => {
+      console.log('[CityEngine] Auto-triggering global view after project load');
+      triggerGlobalView();
+    }, 500);
+  }
 }
 
 // ── Keyboard Drone Controls ────────────────────────────
