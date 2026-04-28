@@ -102,27 +102,52 @@ export function initScene() {
     controls.screenSpacePanning = true; // Enable vertical panning
     controls.maxPolarAngle = Math.PI / 2 - 0.05; // Prevent camera from going below ground (~85°)
     
-    // Keyboard elevation controls
-    let elevationSpeed = 10;
+    // Keyboard elevation controls - use key tracking for immediate response
+    const pressedKeys = new Set();
+    const elevationSpeed = 1.5; // Units per frame
+    
     document.addEventListener('keydown', (e) => {
       if (!controls) return;
+      pressedKeys.add(e.code);
       
-      if (e.code === 'Space') {
+      if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         e.preventDefault();
-        // Elevate camera and target
-        const elevation = 15;
-        camera.position.y += elevation;
-        controls.target.y += elevation;
-        controls.update();
-      } else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
-        e.preventDefault();
-        // Lower camera and target
-        const elevation = -15;
-        camera.position.y = Math.max(10, camera.position.y + elevation);
-        controls.target.y = Math.max(0, controls.target.y + elevation);
-        controls.update();
       }
     });
+    
+    document.addEventListener('keyup', (e) => {
+      pressedKeys.delete(e.code);
+    });
+    
+    // Update elevation in animation loop for smooth response
+    function updateElevation() {
+      if (!controls || pressedKeys.size === 0) {
+        requestAnimationFrame(updateElevation);
+        return;
+      }
+      
+      let elevationDelta = 0;
+      
+      if (pressedKeys.has('Space')) {
+        elevationDelta += elevationSpeed;
+      }
+      if (pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')) {
+        elevationDelta -= elevationSpeed;
+      }
+      
+      if (elevationDelta !== 0) {
+        camera.position.y += elevationDelta;
+        controls.target.y += elevationDelta;
+        camera.position.y = Math.max(10, camera.position.y);
+        controls.target.y = Math.max(0, controls.target.y);
+        controls.update();
+      }
+      
+      requestAnimationFrame(updateElevation);
+    }
+    
+    // Start the elevation update loop
+    requestAnimationFrame(updateElevation);
     
     // Auto-elevation on zoom out
     let lastDistance = controls.getDistance();
@@ -153,11 +178,11 @@ export function initScene() {
   sun.position.set(80, 200, 120);
   scene.add(sun);
 
-  // Grid
-  const grid = new THREE.GridHelper(800, 80, 0x003366, 0x001122);
-  grid.material.opacity = 0.5;
-  grid.material.transparent = true;
-  scene.add(grid);
+  // Grid removed for cleaner look
+  // const grid = new THREE.GridHelper(800, 80, 0x003366, 0x001122);
+  // grid.material.opacity = 0.5;
+  // grid.material.transparent = true;
+  // scene.add(grid);
 
   // Invisible floor for zoom
   const floorGeo = new THREE.PlaneGeometry(2000, 2000);

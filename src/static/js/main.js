@@ -5,11 +5,8 @@
 import { State } from './State.js';
 import * as Visualizer from './Visualizer.js';
 import {
-  buildBuilding, buildEdge, startAnimationLoop, rebuildCity,
-  meshes, nodeMap, nodeMeshMap, edgeObjs, voxels,
-  updateFires, LAYER_X, initLabelRenderer, flyToNode,
-  disposeCity, pauseAnimationLoop, setGraphicsQuality,
-  setUserRenderDistance, getUserRenderDistance
+  rebuildCity, disposeCity, pauseAnimationLoop, setGraphicsQuality,
+  startAnimationLoop, flyToNode, initLabelRenderer, setUserRenderDistance
 } from './CityEngine.js';
 import {
   initDock, initRaycaster, initSLA, initHUD,
@@ -17,6 +14,11 @@ import {
 } from './UIManager.js';
 import { initLiveSync, autoRestoreProject, connectLocal, initLivePipelineStatus } from './DataManager.js';
 import { dashboardManager } from './DashboardManager.js';
+
+// Helper function to check if cinema mode is active (checks body class)
+function isCinemaMode() {
+  return document.body.classList.contains('cinema-mode');
+}
 
 // Load persisted configuration from localStorage
 State.loadPersisted();
@@ -108,7 +110,7 @@ function initOmniSearch() {
   const chooseNode = (node) => {
     if (!node) return;
     State.set('selectedNode', node);
-    flyToNode(node.name || node.id);
+    flyToNode(node.name || node.id, 600); // Faster fly from current position
     modal.classList.remove('open');
   };
 
@@ -266,7 +268,15 @@ if (AWAITING_DATA) {
   // SILENT BOOT: Even if data exists, do NOT auto-load
   // Show dashboard instead and let user choose to load
   const overlay = document.getElementById('awaiting-overlay');
+  const cancelBtn = document.getElementById('dz-cancel');
   if (overlay) overlay.style.display = 'flex';
+  // Don't show cancel button in cinema mode
+  if (cancelBtn && !document.body.classList.contains('cinema-mode-active')) {
+    const active = localStorage.getItem('dagcity_active_project');
+    cancelBtn.style.display = active ? 'flex' : 'none';
+  } else if (cancelBtn) {
+    cancelBtn.style.display = 'none';
+  }
   console.log('[DagCity] Silent boot: Data available but not auto-loaded. User must select project.');
 }
 

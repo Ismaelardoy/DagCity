@@ -19,6 +19,167 @@ const DANGER_THRESHOLD = 5;
 const sidebar   = document.getElementById('sidebar');
 const sbContent = document.getElementById('sb-content');
 let originalNode = null; // Store original node when navigating from lists
+let isCinemaMode = false;
+let originalRadarPosition = null; // Store original radar position for cinema mode
+export { isCinemaMode };
+
+// ── Cinema Mode Toggle ──────────────────────────────────
+export function toggleCinemaMode() {
+  isCinemaMode = !isCinemaMode;
+  
+  console.log('[UIManager] Cinema Mode:', isCinemaMode ? 'ON' : 'OFF');
+  
+  if (isCinemaMode) {
+    document.body.classList.add('cinema-mode-active');
+    document.body.classList.add('cinema-mode');
+    
+    // Force hide elements with aggressive JS (bypass CSS conflicts)
+    const backBtn = document.getElementById('dz-cancel');
+    const minimapContainer = document.getElementById('tactical-map-overlay');
+    const backToMenu = document.getElementById('back-to-menu');
+    const globalMapHint = document.getElementById('global-map-hint');
+    const radarHud = document.getElementById('city-radar-hud');
+    const radarLegend = document.getElementById('city-radar-legend');
+    
+    if (backBtn) {
+      backBtn.style.setProperty('display', 'none', 'important');
+      backBtn.style.setProperty('visibility', 'hidden', 'important');
+    }
+    if (minimapContainer) {
+      minimapContainer.style.setProperty('display', 'none', 'important');
+      minimapContainer.style.setProperty('visibility', 'hidden', 'important');
+    }
+    if (backToMenu) {
+      backToMenu.style.setProperty('display', 'none', 'important');
+      backToMenu.style.setProperty('visibility', 'hidden', 'important');
+    }
+    if (globalMapHint) {
+      globalMapHint.style.setProperty('display', 'none', 'important');
+      globalMapHint.style.setProperty('visibility', 'hidden', 'important');
+    }
+    if (radarHud) {
+      // Save original position before moving radar offscreen
+      originalRadarPosition = {
+        position: radarHud.style.position,
+        left: radarHud.style.left,
+        top: radarHud.style.top,
+        opacity: radarHud.style.opacity
+      };
+      
+      radarHud.style.setProperty('position', 'fixed', 'important');
+      radarHud.style.setProperty('left', '-9999px', 'important');
+      radarHud.style.setProperty('top', '-9999px', 'important');
+      radarHud.style.setProperty('opacity', '0', 'important');
+    }
+    if (radarLegend) {
+      radarLegend.style.setProperty('display', 'none', 'important');
+      radarLegend.style.setProperty('visibility', 'hidden', 'important');
+    }
+    
+    // Nuclear fallback: hide anything that looks like minimapa or UI
+    document.querySelectorAll('.minimap, .tactical-map, [id*="minimap"], [id*="tactical"], [id*="radar"], #dz-cancel, .back-button, #back-to-menu, #global-map-hint').forEach(el => {
+      el.style.setProperty('display', 'none', 'important');
+    });
+    
+    // Pause tactical map render loop to save resources
+    if (window.tacticalMapRenderPending !== undefined) {
+      window.tacticalMapRenderPending = false;
+    }
+  } else {
+    document.body.classList.remove('cinema-mode-active');
+    document.body.classList.remove('cinema-mode');
+    
+    // Revert inline styles when exiting cinema mode
+    const backBtn = document.getElementById('dz-cancel');
+    const minimapContainer = document.getElementById('tactical-map-overlay');
+    const backToMenu = document.getElementById('back-to-menu');
+    const globalMapHint = document.getElementById('global-map-hint');
+    const radarHud = document.getElementById('city-radar-hud');
+    const radarLegend = document.getElementById('city-radar-legend');
+    
+    if (backBtn) {
+      backBtn.style.removeProperty('display');
+      backBtn.style.removeProperty('visibility');
+      const active = localStorage.getItem('dagcity_active_project');
+      backBtn.style.display = active ? 'flex' : 'none';
+    }
+    if (minimapContainer) {
+      minimapContainer.style.removeProperty('display');
+      minimapContainer.style.removeProperty('visibility');
+    }
+    if (backToMenu) {
+      backToMenu.style.removeProperty('display');
+      backToMenu.style.removeProperty('visibility');
+    }
+    if (globalMapHint) {
+      globalMapHint.style.removeProperty('display');
+      globalMapHint.style.removeProperty('visibility');
+    }
+    if (radarHud) {
+      radarHud.style.removeProperty('display');
+      radarHud.style.removeProperty('visibility');
+      // Restore original position
+      if (originalRadarPosition) {
+        radarHud.style.position = originalRadarPosition.position;
+        radarHud.style.left = originalRadarPosition.left;
+        radarHud.style.top = originalRadarPosition.top;
+        radarHud.style.opacity = originalRadarPosition.opacity;
+      } else {
+        // Fallback: remove all inline styles to let CSS take over
+        radarHud.style.removeProperty('position');
+        radarHud.style.removeProperty('left');
+        radarHud.style.removeProperty('top');
+        radarHud.style.removeProperty('opacity');
+      }
+    }
+    if (radarLegend) {
+      radarLegend.style.removeProperty('display');
+      radarLegend.style.removeProperty('visibility');
+    }
+
+    // Undo nuclear fallback for ALL elements matched by the selector
+    document.querySelectorAll('.minimap, .tactical-map, [id*="minimap"], [id*="tactical"], [id*="radar"], #dz-cancel, .back-button, #back-to-menu, #global-map-hint').forEach(el => {
+      // Only remove display: none if we added it (avoid breaking other things)
+      if (el.style.display === 'none') {
+        el.style.removeProperty('display');
+      }
+    });
+    
+    // Force radar re-render after position restoration
+    setTimeout(() => {
+      if (window.drawRadar) {
+        window.drawRadar(performance.now());
+      }
+    }, 50);
+
+    // Reactivate tactical map render if it was visible
+    if (window.tacticalMapVisible) {
+      import('./CityEngine.js').then(m => {
+        if (window.tacticalMapRenderPending !== undefined) {
+          window.tacticalMapRenderPending = true;
+        }
+      });
+    }
+  }
+}
+
+// Keyboard listener for Cinema Mode (V key)
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyV') {
+    toggleCinemaMode();
+  }
+});
+
+// Controls cheat sheet toggle
+const showControlsCheckbox = document.getElementById('check-show-controls');
+if (showControlsCheckbox) {
+  showControlsCheckbox.addEventListener('change', (e) => {
+    const cheatSheet = document.getElementById('controls-cheat-sheet');
+    if (cheatSheet) {
+      cheatSheet.style.display = e.target.checked ? 'block' : 'none';
+    }
+  });
+}
 
 let isSlaPanelOpen = false;
 let isSettingsOpen = false;
@@ -265,16 +426,74 @@ export function openSidebar(n) {
 
     // Hover + click bindings
     listEl.querySelectorAll('.dep-item').forEach(el => {
+      let originalEdgeOpacity = null;
+      let originalEdgeColor = null;
+      let highlightedEdge = null;
+      
       el.addEventListener('mouseenter', () => {
         el.style.background = 'rgba(0,242,255,0.18)';
         el.style.color = '#fff';
         el.style.boxShadow = '0 0 10px rgba(0,242,255,0.35)';
+        
+        // Highlight the connecting edge
+        const nodeId = el.getAttribute('data-node-id');
+        if (n.id && nodeId) {
+          // Find the edge that connects the original node to this node
+          highlightedEdge = edgeObjs.find(e => 
+            (e.src === n.id && e.tgt === nodeId) || 
+            (e.tgt === n.id && e.src === nodeId)
+          );
+          
+          if (highlightedEdge) {
+            // Save original state
+            originalEdgeOpacity = highlightedEdge.line.material.opacity;
+            originalEdgeColor = highlightedEdge.line.material.color.clone();
+            
+            // Highlight the edge
+            highlightedEdge.line.material.opacity = 1.0;
+            highlightedEdge.line.material.color.set(0x00f2ff);
+            highlightedEdge.line.renderOrder = 20;
+            
+            // Also highlight arrows if present
+            if (highlightedEdge.arrows && Array.isArray(highlightedEdge.arrows)) {
+              highlightedEdge.arrows.forEach(arrow => {
+                arrow.line.material.opacity = 1.0;
+                arrow.cone.material.opacity = 1.0;
+                arrow.line.material.color.set(0x00f2ff);
+                arrow.cone.material.color.set(0x00f2ff);
+              });
+            }
+          }
+        }
       });
+      
       el.addEventListener('mouseleave', () => {
         el.style.background = 'transparent';
         el.style.color = '#c8f0ff';
         el.style.boxShadow = 'none';
+        
+        // Restore edge to original state
+        if (highlightedEdge && originalEdgeOpacity !== null && originalEdgeColor !== null) {
+          highlightedEdge.line.material.opacity = originalEdgeOpacity;
+          highlightedEdge.line.material.color.copy(originalEdgeColor);
+          highlightedEdge.line.renderOrder = 10;
+          
+          // Restore arrows if present
+          if (highlightedEdge.arrows && Array.isArray(highlightedEdge.arrows)) {
+            highlightedEdge.arrows.forEach(arrow => {
+              arrow.line.material.opacity = originalEdgeOpacity;
+              arrow.cone.material.opacity = originalEdgeOpacity;
+              arrow.line.material.color.copy(originalEdgeColor);
+              arrow.cone.material.color.copy(originalEdgeColor);
+            });
+          }
+          
+          originalEdgeOpacity = null;
+          originalEdgeColor = null;
+          highlightedEdge = null;
+        }
       });
+      
       el.addEventListener('click', () => {
         const id = el.getAttribute('data-node-id');
         // Store original node before navigating
@@ -1482,7 +1701,8 @@ function startNewProject() {
   overlay.style.display = 'flex'; overlay.classList.remove('hiding');
   const cancelBtn = document.getElementById('dz-cancel');
   const active = localStorage.getItem('dagcity_active_project');
-  if (active) cancelBtn.style.display = 'flex';
+  // Don't show cancel button in cinema mode
+  if (active && !document.body.classList.contains('cinema-mode-active')) cancelBtn.style.display = 'flex';
 }
 
 // ── Raycaster & Click ─────────────────────────────────

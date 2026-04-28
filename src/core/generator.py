@@ -81,7 +81,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   position: fixed;
   top: 18px;
   right: 18px;
-  z-index: 260;
+  z-index: 310;
   width: 44px;
   height: 44px;
   border-radius: 12px;
@@ -96,26 +96,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   box-shadow: 0 10px 24px rgba(0,0,0,0.35);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-}
-#btn-global-view:hover {
-  border-color: rgba(140,245,255,0.8);
-  box-shadow: 0 10px 26px rgba(0,0,0,0.4), 0 0 18px rgba(0,243,255,0.28);
-}
-
-#btn-global-view {
-  position: fixed;
-  top: 18px;
-  right: 18px;
-  z-index: 260;
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  border: 1px solid rgba(0,243,255,0.45);
-  background: rgba(6,14,24,0.82);
-  color: #fff;
-  font-size: 18px;
-  cursor: pointer;
-  transition: all 0.2s;
+  transition: right 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 #btn-global-view:hover {
   background: rgba(0,243,255,0.2);
@@ -126,7 +107,7 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   position: fixed;
   top: 18px;
   right: 70px;
-  z-index: 260;
+  z-index: 310;
   width: 44px;
   height: 44px;
   border-radius: 12px;
@@ -135,16 +116,117 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   color: #fff;
   font-size: 18px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: right 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 #btn-tactical-map:hover {
   background: rgba(0,243,255,0.2);
   transform: scale(1.05);
 }
 
+#sidebar.open ~ #btn-global-view,
+#sidebar.open ~ #btn-tactical-map {
+  right: 460px;
+}
+
+/* ── Cinema Mode - Master Class Solution ── */
+body.cinema-mode-active #header,
+body.cinema-mode-active #subtitle,
+body.cinema-mode-active #btn-global-view,
+body.cinema-mode-active #btn-tactical-map,
+body.cinema-mode-active #omni-launch,
+body.cinema-mode-active #omni-modal,
+body.cinema-mode-active #ide-dock,
+body.cinema-mode-active #sidebar,
+body.cinema-mode-active #island-jump-panel,
+body.cinema-mode-active #global-island-jump-panel,
+body.cinema-mode-active #smart-hud,
+body.cinema-mode-active .settings-panel,
+body.cinema-mode-active .sla-panel,
+body.cinema-mode-active .architecture-panel,
+body.cinema-mode-active .ai-panel,
+body.cinema-mode-active #legend,
+body.cinema-mode-active #stats,
+body.cinema-mode-active #sync-hud-item,
+body.cinema-mode-active #help-trigger-left,
+body.cinema-mode-active #help-hint,
+body.cinema-mode-active #tactical-map-overlay,
+body.cinema-mode-active #tactical-map-container,
+body.cinema-mode-active #tactical-map-legend,
+body.cinema-mode-active #dz-cancel,
+body.cinema-mode-active #project-modal,
+body.cinema-mode-active #pm-card,
+body.cinema-mode-active #awaiting-overlay,
+body.cinema-mode-active #az-bg,
+body.cinema-mode-active .az-inner,
+body.cinema-mode-active #city-radar-legend,
+body.cinema-mode-active #back-to-menu,
+body.cinema-mode-active #global-map-hint {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+/* Move radar offscreen instead of hiding to preserve canvas context */
+body.cinema-mode-active #city-radar-hud {
+  position: fixed !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+body.cinema-mode-active #canvas-container {
+  opacity: 1 !important;
+  transition: opacity 0.5s ease-in-out;
+}
+
+/* ── Cinema Mode - Old selector for compatibility ── */
+body.cinema-mode #header,
+body.cinema-mode #subtitle,
+body.cinema-mode #btn-global-view,
+body.cinema-mode #btn-tactical-map,
+body.cinema-mode #back-to-menu,
+body.cinema-mode #global-map-hint,
+body.cinema-mode #city-radar-hud,
+body.cinema-mode #city-radar-legend,
+body.cinema-mode #omni-launch,
+body.cinema-mode #omni-modal,
+body.cinema-mode #ide-dock,
+body.cinema-mode #sidebar,
+body.cinema-mode #island-jump-panel,
+body.cinema-mode #global-island-jump-panel,
+body.cinema-mode #smart-hud,
+body.cinema-mode .settings-panel,
+body.cinema-mode .sla-panel,
+body.cinema-mode .architecture-panel,
+body.cinema-mode .ai-panel,
+body.cinema-mode #legend,
+body.cinema-mode #stats,
+body.cinema-mode #sync-hud-item,
+body.cinema-mode #help-trigger-left,
+body.cinema-mode #help-hint,
+body.cinema-mode #tactical-map-overlay,
+body.cinema-mode #tactical-map-container,
+body.cinema-mode #tactical-map-legend,
+body.cinema-mode #dz-cancel,
+body.cinema-mode #project-modal,
+body.cinema-mode #pm-card,
+body.cinema-mode #awaiting-overlay {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+body.cinema-mode #canvas-container {
+  opacity: 1 !important;
+  transition: opacity 0.5s ease-in-out;
+}
+
 #omni-launch {
   position: fixed;
-  top: 164px;
+  top: 124px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 120;
@@ -1597,7 +1679,7 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
     </div>
     <div class="dock-item" id="dock-settings" title="Engine Settings">
       <span class="dock-icon">⚙️</span>
-      <span class="dock-label">VIEWPORT & ENGINE</span>
+      <span class="dock-label">GENERAL SETTINGS</span>
     </div>
   </div>
   <div class="dock-divider"></div>
@@ -1675,17 +1757,7 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
     </div>
 
     <div class="sla-section">
-      <div class="sla-label">Graphics Quality</div>
-      <div class="graphics-control">
-        <span>Low</span>
-        <input type="range" id="graphics-slider" min="0" max="1" step="1" value="1">
-        <span>High</span>
-      </div>
-      <div class="sla-desc" style="margin-top:10px;">Optimize for large projects (1000+ nodes): disable bloom, use basic materials, hide particles.</div>
-    </div>
-
-    <div class="sla-section">
-      <div class="sla-label">Global SLA Threshold</div>
+      <div class="sla-label">Global SLA Threshold"></div>
       <div class="sla-row">
         <div class="sla-name">Execution Time Limit</div>
         <div class="sla-val" id="sla-global-val" contenteditable="true">120s</div>
@@ -1698,10 +1770,6 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
       <div class="sla-fire-count">
         <div class="fire-num" id="sla-fire-count">0</div>
         <div class="fire-label">NODES<br>ON FIRE</div>
-      </div>
-      <div class="sla-fire-count" style="margin-top: 8px;">
-        <div class="fire-num" id="fps-counter">60</div>
-        <div class="fire-label">FPS</div>
       </div>
     </div>
     <div class="sla-section">
@@ -1771,28 +1839,55 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
 
     <div class="settings-section">
       <div class="settings-label">Navigation</div>
-      <div class="settings-row">
-        <div class="settings-name">Auto-Rotate</div>
-        <label class="switch">
-          <input type="checkbox" id="check-auto-rotate" checked>
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="sla-desc" style="margin-top:-5px;margin-bottom:20px;">Smooth cinematic orbit around the city</div>
-
-      <button class="settings-action-btn" id="btn-reset-view">RESET VIEW</button>
-      <button class="settings-action-btn" id="btn-global-view-settings" style="margin-top:10px;">🌎 GLOBAL VIEW</button>
+      <button class="settings-action-btn" id="btn-global-view-settings">🌎 GLOBAL VIEW</button>
     </div>
 
     <div class="settings-section">
-      <div class="settings-label">Post-Processing</div>
-      <div class="settings-row">
+      <div class="settings-label">Advanced Graphics</div>
+      
+      <div class="settings-row" style="margin-top:20px;">
+        <div class="settings-name">Graphics Quality</div>
+        <div class="settings-val" id="val-graphics-quality">High</div>
+      </div>
+      <div class="graphics-control" style="margin-top:10px;">
+        <span>Low</span>
+        <input type="range" id="graphics-slider" min="0" max="1" step="1" value="1">
+        <span>High</span>
+      </div>
+      <div class="sla-desc" style="margin-top:10px;">Low quality disables bloom and optimizes performance for large projects.</div>
+
+      <div class="settings-row" style="margin-top:25px;">
         <div class="settings-name">Neon Bloom Intensity</div>
         <div class="settings-val" id="val-bloom">0.0</div>
       </div>
       <div class="sla-slider-track">
         <div class="sla-slider-fill" id="fill-bloom" style="width:0%"></div>
         <input type="range" class="sla-input" id="input-bloom" min="0" max="200" value="0">
+      </div>
+
+      <div class="settings-row" style="margin-top:25px;">
+        <div class="settings-name">FPS Counter</div>
+        <div class="settings-val" id="fps-counter">60</div>
+      </div>
+      <div class="sla-desc" style="margin-top:-5px;">Current frame rate</div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-label">Keyboard Controls</div>
+      <div class="settings-row" style="margin-top:20px;">
+        <div class="settings-name">Show Controls</div>
+        <label class="switch">
+          <input type="checkbox" id="check-show-controls" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div id="controls-cheat-sheet" style="margin-top:15px;padding:15px;background:rgba(0,242,255,0.05);border:1px solid rgba(0,242,255,0.2);border-radius:8px;font-size:12px;color:rgba(255,255,255,0.8);line-height:1.8;">
+        <div style="margin-bottom:8px;"><strong style="color:var(--cyan)">W, A, S, D / Arrows:</strong> Movement</div>
+        <div style="margin-bottom:8px;"><strong style="color:var(--cyan)">Space / Shift:</strong> Up / Down Camera</div>
+        <div style="margin-bottom:8px;"><strong style="color:var(--cyan)">V:</strong> Cinema Mode (Hide UI)</div>
+        <div style="margin-bottom:8px;"><strong style="color:var(--cyan)">R:</strong> Reset Camera</div>
+        <div style="margin-bottom:8px;"><strong style="color:var(--cyan)">Right Click:</strong> Pan</div>
+        <div><strong style="color:var(--cyan)">Mouse Wheel:</strong> Zoom</div>
       </div>
     </div>
 
@@ -1953,11 +2048,11 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
   <div style="color:rgba(255,255,255,0.2)">•</div>
   <div class="hud-item"><span class="hud-icon">🎡</span> <span class="hud-label">SCROLL</span> → ZOOM</div>
   <div style="color:rgba(255,255,255,0.2)">•</div>
-  <div class="hud-item"><span class="hud-icon">�</span> <span class="hud-label">␣ SPACE</span> → ELEVATE</div>
+  <div class="hud-item"><span class="hud-icon">⬆️</span> <span class="hud-label">SPACE</span> → ELEVATE</div>
   <div style="color:rgba(255,255,255,0.2)">•</div>
-  <div class="hud-item"><span class="hud-icon">⬇️</span> <span class="hud-label">⇧ SHIFT</span> → DESCEND</div>
+  <div class="hud-item"><span class="hud-icon">⬇️</span> <span class="hud-label">SHIFT</span> → DESCEND</div>
   <div style="color:rgba(255,255,255,0.2)">•</div>
-  <div class="hud-item"><span class="hud-icon">��</span> <span class="hud-label">SELECT</span> → INSPECT</div>
+  <div class="hud-item"><span class="hud-icon">👆</span> <span class="hud-label">CLICK</span> → INSPECT</div>
 </div>
 
 <!-- Live sync / offline indicator (under #stats, bottom-right) -->

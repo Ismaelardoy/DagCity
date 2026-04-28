@@ -4,10 +4,15 @@
 import { State } from './State.js';
 import * as Visualizer from './Visualizer.js';
 import {
-  scene, camera, renderer, controls, 
+  scene, camera, renderer, controls,
   initScene, INIT_CAM, composer, bloomPass,
 } from './Visualizer.js';
 import { VFXManager } from './VFXManager.js';
+
+// Helper function to check if cinema mode is active (checks body class)
+function isCinemaMode() {
+  return document.body.classList.contains('cinema-mode');
+}
 
 // CSS2DRenderer para etiquetas flotantes de volumen de datos
 let labelRenderer = null;
@@ -173,7 +178,15 @@ let tacticalMapHotkeyBound = false;
 let tacticalMapIslandPositions = []; // Cache island positions on canvas
 let tacticalMapRenderPending = false; // Flag for deferred rendering
 
+// Export tactical map state for cinema mode
+export { tacticalMapVisible, tacticalMapRenderPending };
+window.tacticalMapVisible = tacticalMapVisible;
+window.tacticalMapRenderPending = tacticalMapRenderPending;
+
 function openTacticalMap() {
+  // Don't open tactical map in cinema mode
+  if (isCinemaMode) return;
+
   if (!tacticalMapOverlay) {
     initTacticalMap();
   }
@@ -263,6 +276,9 @@ function bindGlobalHotkeys() {
 }
 
 function renderTacticalMap() {
+  // Don't render if cinema mode is active
+  if (document.body.classList.contains('cinema-mode-active')) return;
+  
   if (!tacticalMapCtx || !tacticalMapCanvas || !camera) return;
   
   // Check if canvas has valid dimensions
@@ -1577,6 +1593,10 @@ let isGlobalViewActive = false;
 let _preGlobalViewControlsState = null;
 // Flag to prevent immediate interruption when global view is activated programmatically
 let _globalViewJustActivated = false;
+// ── Camera Memory for Detail View ─────────────────────────────
+// Stores the last detail camera position and target before entering Global View
+let lastDetailPosition = null;
+let lastDetailTarget = null;
 
 export function getUserRenderDistance() { return userRenderDistance; }
 
@@ -2537,9 +2557,15 @@ function easeInOutCubic(x) {
   return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 }
 
+// Quadratic.InOut easing - smoother than Cubic
+function easeInOutQuad(x) {
+  return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+}
+
 // ─────────────────────────────────────────────────────────
 // CONTROLS INTERRUPT HANDLER — bound once, lazily, on first tween.
-// When the user grabs the camera (mouse-down / touch / wheel start), we:
+// When the user grabs the camera (mouse-down / touch / wheel start / keyboard),
+// we:
 //  1) Kill any in-flight cinematic camTween IMMEDIATELY (no further onUpdate
 //     calls, no FPS-killing forced re-renders during user interaction).
 //  2) If we were in Global View, deactivate it and clamp camera.far back to
@@ -2562,43 +2588,87 @@ function _restoreControlsAfterGlobalView() {
 }
 
 let _controlsInterruptBound = false;
+let _keyboardInterruptHandler = null;
 function _bindControlsInterruptHandler() {
   if (_controlsInterruptBound || !controls || typeof controls.addEventListener !== 'function') return;
   _controlsInterruptBound = true;
+  
+  // Mouse/touch interrupt handler
   controls.addEventListener('start', () => {
-    // 1. Kill camera tween immediately.
-    if (camTween) {
-      camTween = null;
-      cinematicFlightActive = false;
-      isSystemAnimating = false;
-      _suspendSectorCulling = false;
-      // Restore DRS (was disabled by the cinematic flight).
-      if (DRS) DRS.enabled = cinematicPrevDRSEnabled;
-    }
-    // 2. Exit Global View — keep infinite render distance + restore controls.
-    if (isGlobalViewActive && !_globalViewJustActivated) {
-      isGlobalViewActive = false;
-      if (islandJumpPanel) islandJumpPanel.style.display = 'none';
-      if (camera) {
-        camera.far = ALWAYS_RENDER_DISTANCE;
-        camera.updateProjectionMatrix();
-      }
-      if (DRS) {
-        DRS.baseCameraFar = ALWAYS_RENDER_DISTANCE;
-        DRS.baseRenderDistance = ALWAYS_RENDER_DISTANCE;
-      }
-      MAX_RENDER_DISTANCE = ALWAYS_RENDER_DISTANCE;
-      _cullDirty = true;
-      // CRITICAL: put OrbitControls back to the user's normal navigation feel
-      // (autoRotate off, original min/maxDistance, original zoom/damping).
-      _restoreControlsAfterGlobalView();
-      console.log('[CityEngine] Global View interrupted — controls + far plane restored');
-    } else if (controls && controls.autoRotate) {
-      // Edge case: tween already finished but the user never interacted yet.
-      // Still kill the auto-rotation on first user input.
-      controls.autoRotate = false;
-    }
+    _handleInterrupt();
   });
+  
+  // Keyboard interrupt handler for navigation keys
+  _keyboardInterruptHandler = (e) => {
+    // Navigation keys: Arrow keys, WASD, Space, Shift
+    const navKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight'];
+    if (navKeys.includes(e.code)) {
+      _handleInterrupt();
+    }
+  };
+  document.addEventListener('keydown', _keyboardInterruptHandler);
+}
+
+function _handleInterrupt() {
+  // 1. Kill camera tween immediately.
+  if (camTween) {
+    camTween = null;
+    cinematicFlightActive = false;
+    isSystemAnimating = false;
+    _suspendSectorCulling = false;
+    // Restore DRS (was disabled by the cinematic flight).
+    if (DRS) DRS.enabled = cinematicPrevDRSEnabled;
+  }
+  // 2. Exit Global View — keep infinite render distance + restore controls.
+  if (isGlobalViewActive && !_globalViewJustActivated) {
+    isGlobalViewActive = false;
+    if (islandJumpPanel) islandJumpPanel.style.display = 'none';
+    
+    // ── Camera Memory: Smooth transition back to detail view ──
+    if (lastDetailPosition && lastDetailTarget && camera && controls) {
+      // Add overhead offset for better context recovery
+      const overheadOffset = new THREE.Vector3(0, 40, 0);
+      const targetPos = lastDetailPosition.clone().add(overheadOffset);
+      const targetTgt = lastDetailTarget.clone();
+      
+      console.log('[CameraMemory] Returning to detail view with overhead offset');
+      
+      // Smooth transition with Quadratic.InOut easing
+      tweenCamera(targetPos, targetTgt, 1200, {
+        easing: easeInOutQuad,
+        onUpdate: (progress) => {
+          // Optional: Add subtle arc lift during transition
+          const arcLift = Math.sin(Math.PI * progress) * 20;
+          camera.position.y += arcLift;
+        },
+        onComplete: () => {
+          // Clear saved position after successful return
+          lastDetailPosition = null;
+          lastDetailTarget = null;
+          console.log('[CameraMemory] Detail view restored, memory cleared');
+        }
+      });
+    } else {
+      // Fallback: direct restoration if no saved position
+      _restoreControlsAfterGlobalView();
+    }
+    
+    if (camera) {
+      camera.far = ALWAYS_RENDER_DISTANCE;
+      camera.updateProjectionMatrix();
+    }
+    if (DRS) {
+      DRS.baseCameraFar = ALWAYS_RENDER_DISTANCE;
+      DRS.baseRenderDistance = ALWAYS_RENDER_DISTANCE;
+    }
+    MAX_RENDER_DISTANCE = ALWAYS_RENDER_DISTANCE;
+    _cullDirty = true;
+    console.log('[CityEngine] Global View interrupted — smooth transition to detail view');
+  } else if (controls && controls.autoRotate) {
+    // Edge case: tween already finished but the user never interacted yet.
+    // Still kill the auto-rotation on first user input.
+    controls.autoRotate = false;
+  }
 }
 
 export function tweenCamera(to, toTarget, dur=1200, options = null) {
@@ -2914,6 +2984,13 @@ export function fitCameraToAll(durationMs = 1500) {
 }
 
 export function triggerGlobalView(durationMs = GLOBAL_VIEW_FLIGHT_MS) {
+  // Save current detail camera position before entering Global View
+  if (camera && controls) {
+    lastDetailPosition = camera.position.clone();
+    lastDetailTarget = controls.target.clone();
+    console.log('[CameraMemory] Saved detail position:', lastDetailPosition, 'target:', lastDetailTarget);
+  }
+  
   _globalViewJustActivated = true;
   setTimeout(() => { _globalViewJustActivated = false; }, 2000);
   fitCameraToAll(durationMs);
@@ -2983,7 +3060,7 @@ export function flyToNodeNoSelect(nodeId, durationMs = 1100) {
   tweenCamera(destPos, buildingPos.clone().add(new THREE.Vector3(0, 12, 0)), durationMs);
 }
 
-export function flyToNode(nodeNameOrId) {
+export function flyToNode(nodeNameOrId, durationMs = 800) {
   if (!nodeNameOrId) return;
   const key = String(nodeNameOrId).toLowerCase();
   const targetNode = Object.values(nodeMap).find((n) => {
@@ -3009,7 +3086,7 @@ export function flyToNode(nodeNameOrId) {
 
   const currentDir = camera.position.clone().sub(controls.target).normalize();
   const destPos = buildingPos.clone().add(currentDir.multiplyScalar(140));
-  tweenCamera(destPos, buildingPos.clone().add(new THREE.Vector3(0, 12, 0)), 1100);
+  tweenCamera(destPos, buildingPos.clone().add(new THREE.Vector3(0, 12, 0)), durationMs);
 }
 
 function flyToIslandCenter(islandKey) {
@@ -3583,6 +3660,12 @@ function drawRadar(now) {
   radarCtx.fill();
 }
 
+// Export drawRadar and radar context for cinema mode re-render
+export { drawRadar, radarCanvas, radarCtx };
+window.drawRadar = drawRadar;
+window.radarCanvas = radarCanvas;
+window.radarCtx = radarCtx;
+
 // ── Rebuild City ───────────────────────────────────────
 export function updateSyncMetrics() {
   maxRadius = 0;
@@ -3624,13 +3707,49 @@ export function setGraphicsQuality(level) {
   // 2. Post-processing: bloom on in HIGH, off in LOW.
   if (bloomPass) bloomPass.enabled = isHigh;
 
-  // 3. Cheap shadow flags on existing meshes (does NOT alter their materials).
+  // 3. Bloom slider dependency: disable and force to 0 in LOW quality
+  const bloomSlider = document.getElementById('input-bloom');
+  const bloomFill = document.getElementById('fill-bloom');
+  const bloomVal = document.getElementById('val-bloom');
+  const graphicsQualityVal = document.getElementById('val-graphics-quality');
+  
+  if (isLow) {
+    // Disable bloom slider and force to 0
+    if (bloomSlider) {
+      bloomSlider.disabled = true;
+      bloomSlider.value = 0;
+      bloomSlider.style.opacity = '0.4';
+    }
+    if (bloomFill) {
+      bloomFill.style.width = '0%';
+    }
+    if (bloomVal) {
+      bloomVal.textContent = '0.0';
+    }
+    // Also disable bloom pass
+    if (bloomPass) {
+      bloomPass.strength = 0;
+    }
+  } else {
+    // Enable bloom slider
+    if (bloomSlider) {
+      bloomSlider.disabled = false;
+      bloomSlider.style.opacity = '1';
+    }
+  }
+  
+  // Update graphics quality text
+  if (graphicsQualityVal) {
+    graphicsQualityVal.textContent = isHigh ? 'High' : 'Low';
+  }
+
+  // 4. Cheap shadow flags on existing meshes (does NOT alter their materials).
   meshes.forEach(mesh => {
     mesh.castShadow = isHigh;
     mesh.receiveShadow = isHigh;
   });
 
-  // 4. Edges: particles half-count + 3× speed in LOW. Visibility/speed only,
+  // 5. Edges: particles half-count + 3× speed in LOW. Visibility/speed only,
   //    no material/color changes.
   const SPEED_MULT_LOW = 3.0;
   edgeObjs.forEach(e => {
@@ -3649,11 +3768,11 @@ export function setGraphicsQuality(level) {
     }
   });
 
-  // 5. Persist (single source of truth) + sync legacy State key.
+  // 6. Persist (single source of truth) + sync legacy State key.
   try { localStorage.setItem('dagcity_graphics', isHigh ? '1' : '0'); } catch (_) {}
   State.graphicsMode = isHigh ? 'high' : 'low';
 
-  // 6. Sync slider DOM idempotently.
+  // 7. Sync slider DOM idempotently.
   const slider = document.getElementById('graphics-slider');
   if (slider) slider.value = isHigh ? '1' : '0';
 
@@ -4239,7 +4358,7 @@ export function rebuildCity(graphData, isLiveSync = false) {
   const hasRealNew = graphData.metadata?.has_real_times || false;
   const statsEl = document.getElementById('stats');
   if (statsEl) {
-    statsEl.innerHTML = `NODES&nbsp;<span style="color:#fff">${nodes.length}</span><br>EDGES&nbsp;<span style="color:#fff">${links.length}</span><br>${hasRealNew?`<span style="color:var(--green)">✓ REAL TIMES</span>`:`<span style="color:var(--orange)">∼ SIMULATED</span>`}`;
+    statsEl.innerHTML = `NODES&nbsp;<span style="color:#fff">${nodes.length}</span><br>EDGES&nbsp;<span style="color:#fff">${links.length}</span><br>${hasRealNew?`<span style="color:var(--green)">✓ REAL TIMES</span>`:`<span style="color:var(--orange)">NO TIME</span>`}`;
   }
 
   // Restore selection
@@ -4412,6 +4531,43 @@ export function disposeCity({ resetCamera = true } = {}) {
   console.log('[CityEngine] disposeCity called');
   pauseAnimationLoop();
 
+  // Dispose island labels FIRST (before disposing islandGroups)
+  islandLabels.forEach(l => {
+    if (l.parent) l.parent.remove(l);
+    if (l.material?.map) l.material.map.dispose();
+    if (l.material) l.material.dispose();
+  });
+  islandLabels.length = 0;
+
+  // Dispose island groups (which contain island labels)
+  Object.keys(islandGroups).forEach(k => {
+    const g = islandGroups[k];
+    if (g && g.parent) g.parent.remove(g);
+    delete islandGroups[k];
+    delete islandMeta[k];
+    delete islandCenters[k];
+  });
+
+  // Clear LOD saved references
+  Object.keys(islandMeta).forEach(k => {
+    const meta = islandMeta[k];
+    if (!meta) return;
+    meta._lodSavedParent = null;
+    meta._lodSavedLabel = null;
+    meta._lodFar = false;
+    if (meta.tacticalRing) {
+      if (meta.tacticalRing.parent) meta.tacticalRing.parent.remove(meta.tacticalRing);
+      if (meta.tacticalRing.geometry) meta.tacticalRing.geometry.dispose();
+      if (meta.tacticalRing.material?.map) meta.tacticalRing.material.map.dispose();
+      if (meta.tacticalRing.material) meta.tacticalRing.material.dispose();
+      meta.tacticalRing = null;
+    }
+    if (meta._ringFadeRaf) {
+      cancelAnimationFrame(meta._ringFadeRaf);
+      meta._ringFadeRaf = null;
+    }
+  });
+
   // Dispose meshes
   [...meshes].forEach(m => {
     const diagramSprite = m.userData?.diagramSprite;
@@ -4473,47 +4629,6 @@ export function disposeCity({ resetCamera = true } = {}) {
     }
   });
   edgeObjs.length = 0;
-
-  // Island labels
-  islandLabels.forEach(l => {
-    if (l.parent) l.parent.remove(l);
-    if (l.material?.map) l.material.map.dispose();
-    if (l.material) l.material.dispose();
-  });
-  islandLabels.length = 0;
-
-  // Island groups
-  Object.keys(islandGroups).forEach(k => {
-    const g = islandGroups[k];
-    if (g && g.parent) g.parent.remove(g);
-    delete islandGroups[k];
-    delete islandMeta[k];
-    delete islandCenters[k];
-  });
-
-  // Clear LOD saved references
-  Object.keys(islandMeta).forEach(k => {
-    const meta = islandMeta[k];
-    if (!meta) return;
-    meta._lodSavedParent = null;
-    meta._lodSavedLabel = null;
-    meta._lodFar = false;
-    if (meta.tacticalRing) {
-      if (meta.tacticalRing.parent) meta.tacticalRing.parent.remove(meta.tacticalRing);
-      if (meta.tacticalRing.geometry) meta.tacticalRing.geometry.dispose();
-      if (meta.tacticalRing.material?.map) meta.tacticalRing.material.map.dispose();
-      if (meta.tacticalRing.material) meta.tacticalRing.material.dispose();
-      meta.tacticalRing = null;
-    }
-    if (meta._ringFadeRaf) {
-      cancelAnimationFrame(meta._ringFadeRaf);
-      meta._ringFadeRaf = null;
-    }
-    if (meta._ringLabelTimer) {
-      clearTimeout(meta._ringLabelTimer);
-      meta._ringLabelTimer = null;
-    }
-  });
 
   // Global arcs group
   if (globalArcsGroup) {

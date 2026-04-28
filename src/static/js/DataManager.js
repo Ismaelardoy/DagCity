@@ -6,6 +6,11 @@ import { rebuildCity } from './CityEngine.js';
 import { loadSLAFromProject, renderZoneSliders, renderNodeOverrides, updateSyncHUD } from './UIManager.js';
 import { updateFires } from './CityEngine.js';
 
+// Helper function to check if cinema mode is active (checks body class)
+function isCinemaMode() {
+  return document.body.classList.contains('cinema-mode');
+}
+
 // ── Drag & Drop upload ─────────────────────────────────
 const _dzFiles = { manifest: null, run_results: null };
 window._dzFiles = _dzFiles; // Exported for startNewProject in UIManager
@@ -108,8 +113,20 @@ function _dzReadFile(file) {
 export function _dzHideOverlay() {
   return new Promise(resolve => {
     const overlay = document.getElementById('awaiting-overlay');
+    const cancelBtn = document.getElementById('dz-cancel');
     overlay.classList.add('hiding');
-    setTimeout(() => { overlay.style.display = 'none'; overlay.classList.remove('hiding'); resolve(); }, 650);
+    setTimeout(() => {
+      overlay.style.display = 'none';
+      overlay.classList.remove('hiding');
+      // Don't show cancel button in cinema mode
+      if (cancelBtn && !document.body.classList.contains('cinema-mode-active')) {
+        const active = localStorage.getItem('dagcity_active_project');
+        cancelBtn.style.display = active ? 'flex' : 'none';
+      } else if (cancelBtn) {
+        cancelBtn.style.display = 'none';
+      }
+      resolve();
+    }, 650);
   });
 }
 // Also expose on window so CityEngine can call it
