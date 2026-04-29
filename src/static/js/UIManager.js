@@ -4,7 +4,7 @@
 import { State } from './State.js';
 import {
   meshes, nodeMeshMap, edgeObjs, nodeMap,
-  applySelection, applyBlastRadius, resetSelection, tweenCamera, updateFires, rebuildCity, flyToNode, flyToNodeNoSelect,
+  applySelection, applyBlastRadius, resetSelection, tweenCamera, updateFires, rebuildCity, disposeCity, flyToNode, flyToNodeNoSelect,
   makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics, getRaycastTargets, zoomToFitAll, GLOBAL_VIEW_FLIGHT_MS, flyToIsland, isGlobalViewMode
 } from './CityEngine.js';
 import { controls, camera, composer } from './Visualizer.js';
@@ -22,6 +22,11 @@ let originalNode = null; // Store original node when navigating from lists
 let isCinemaMode = false;
 let originalRadarPosition = null; // Store original radar position for cinema mode
 export { isCinemaMode };
+
+function syncRightSidebarUIState() {
+  const open = !!(sidebar && sidebar.classList.contains('open'));
+  document.body.classList.toggle('right-sidebar-open', open);
+}
 
 // ── Cinema Mode Toggle ──────────────────────────────────
 export function toggleCinemaMode() {
@@ -376,6 +381,7 @@ export function openSidebar(n) {
     </div>
   `;
   sidebar.classList.add('open');
+  syncRightSidebarUIState();
   const s = document.getElementById('schema-search');
   if (s) s.addEventListener('input', () => {
     const q = s.value.toLowerCase();
@@ -625,6 +631,7 @@ export function openSidebar(n) {
 
 export function closeSidebar() {
   sidebar.classList.remove('open');
+  syncRightSidebarUIState();
   resetSelection();
   originalNode = null; // Clear original node when closing sidebar
   // We no longer force autoRotate = true here.
@@ -804,6 +811,7 @@ export function initSettings() {
       zoomToFitAll(GLOBAL_VIEW_FLIGHT_MS);
       setAutoRotateEnabled(true, false);
       if (sidebar) sidebar.classList.remove('open');
+      syncRightSidebarUIState();
       resetSelection();
     });
   }
@@ -814,6 +822,7 @@ export function initSettings() {
       zoomToFitAll(GLOBAL_VIEW_FLIGHT_MS);
       setAutoRotateEnabled(true, false);
       if (sidebar) sidebar.classList.remove('open');
+      syncRightSidebarUIState();
       resetSelection();
     });
   }
@@ -1574,15 +1583,31 @@ async function loadProject(name) {
       throw new Error('Not found');
     }
     const data = await res.json();
+    const source = data?.metadata?.source || 'offline';
+    const isLiveSource = source === 'live_sync' || source === 'local_sync';
+
     localStorage.setItem('dagcity_active_project', name);
-    localStorage.removeItem('dagcity_is_live');
+    if (isLiveSource) {
+      localStorage.setItem('dagcity_is_live', 'true');
+      localStorage.setItem('dagcity_live_sync_session', JSON.stringify({
+        mode: 'live_sync',
+        project: name,
+        connectedAt: Date.now(),
+      }));
+    } else {
+      localStorage.removeItem('dagcity_is_live');
+      localStorage.removeItem('dagcity_live_sync_session');
+    }
+
     projectModal.classList.remove('open');
     const overlay = document.getElementById('awaiting-overlay');
     if (overlay.style.display !== 'none') await window._dzHideOverlay();
+
+    // Defensive cleanup to avoid stale painted/island state across project switches.
+    disposeCity({ resetCamera: true });
     rebuildCity(data, false);
     
     // Update HUD Sync Status
-    const source = data?.metadata?.source || 'offline';
     updateSyncHUD(source);
 
     loadSLAFromProject(data);
@@ -1604,6 +1629,9 @@ async function deleteProject(name) {
   const active = localStorage.getItem('dagcity_active_project');
   try {
     await fetch('/api/projects/' + encodeURIComponent(name), { method: 'DELETE' });
+    if (typeof window.initLivePipelineStatus === 'function') {
+      window.initLivePipelineStatus();
+    }
     if (active === name) {
       localStorage.removeItem('dagcity_active_project');
       startNewProject();
@@ -1699,6 +1727,8 @@ function startNewProject() {
   document.getElementById('upload-status').textContent = 'READY FOR NEW METROPOLIS';
   const overlay = document.getElementById('awaiting-overlay');
   overlay.style.display = 'flex'; overlay.classList.remove('hiding');
+  localStorage.removeItem('dagcity_is_live');
+  localStorage.removeItem('dagcity_live_sync_session');
   const cancelBtn = document.getElementById('dz-cancel');
   const active = localStorage.getItem('dagcity_active_project');
   // Don't show cancel button in cinema mode
@@ -1807,7 +1837,7 @@ export function initRaycaster(renderer, camera) {
     if (found) {
       const selectedNode = State.selectedNode;
       if (selectedNode?.id === found.id) {
-        if (sidebar.classList.contains('open')) { sidebar.classList.remove('open'); resetSelection(); }
+        if (sidebar.classList.contains('open')) { sidebar.classList.remove('open'); syncRightSidebarUIState(); resetSelection(); }
         else { openSidebar(found); applySelection(found); }
         return;
       }
@@ -1831,7 +1861,7 @@ export function initRaycaster(renderer, camera) {
         }
       }
     } else {
-      sidebar.classList.remove('open'); resetSelection();
+      sidebar.classList.remove('open'); syncRightSidebarUIState(); resetSelection();
     }
 
 
@@ -1924,6 +1954,10 @@ export function updateSyncHUD(source) {
     dot.className = 'status-dot green';
     text.innerHTML = '📡 LIVE SYNC';
     text.style.color = '#39ff14';
+  } else if (source === 'live_snapshot') {
+    dot.className = 'status-dot orange';
+    text.innerHTML = '📁 LIVE (SNAPSHOT)';
+    text.style.color = '#ffb347';
   } else {
     dot.className = 'status-dot orange';
     text.innerHTML = '⏸ OFFLINE';

@@ -185,10 +185,14 @@ window.tacticalMapRenderPending = tacticalMapRenderPending;
 
 function openTacticalMap() {
   // Don't open tactical map in cinema mode
-  if (isCinemaMode) return;
+  if (isCinemaMode()) return;
 
   if (!tacticalMapOverlay) {
     initTacticalMap();
+  }
+  if (!tacticalMapOverlay) {
+    console.warn('[TacticalMap] Overlay not found; cannot open Global Map');
+    return;
   }
   tacticalMapVisible = true;
   tacticalMapOverlay.style.display = 'flex';
@@ -3856,7 +3860,8 @@ export function rebuildCity(graphData, isLiveSync = false) {
   // Notify UI so the LIVE SYNC / OFFLINE indicator follows the active project.
   // Sources: 'live_sync', 'local_sync' → live; anything else → offline.
   try {
-    const src = graphData.metadata?.source
+    const src = graphData.metadata?.sync_source
+      || graphData.metadata?.source
       || (isLiveSync ? 'live_sync' : 'offline');
     window.dispatchEvent(new CustomEvent('dagcity:sync-source', { detail: { source: src } }));
 
@@ -4352,6 +4357,21 @@ export function rebuildCity(graphData, isLiveSync = false) {
   nodes.forEach(n => buildBuilding(n));
   links.forEach(l => buildEdge(l));
   updateSyncMetrics();
+
+  // Re-apply current quality after new scene objects exist.
+  // On first project load, edges/particles are created AFTER the early quality
+  // application path, so low-mode visibility/speed optimizations must be
+  // enforced again here to avoid needing a manual high->low toggle.
+  let activeGraphics = '1';
+  try {
+    const stored = localStorage.getItem('dagcity_graphics');
+    activeGraphics = (stored === '0' || stored === '1')
+      ? stored
+      : (State.graphicsMode === 'low' ? '0' : '1');
+  } catch (_) {
+    activeGraphics = State.graphicsMode === 'low' ? '0' : '1';
+  }
+  setGraphicsQuality(activeGraphics);
 
   buildStart = performance.now();
 

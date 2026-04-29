@@ -12,7 +12,11 @@ services:
     environment:
       - MANIFEST_PATH=/data/${MANIFEST_SUBPATH:-target/manifest.json}
       - PORT=${PORT:-8080}
+      - PROJECTS_DIR=/app/projects
+      - WORKSPACE_PATH=/app/workspace.json
     volumes:
       # Mount the host project directory to /data in the container
       - ${HOST_PROJECT_PATH:-./data}:/data
+      # Persist DagCity saved projects independently from live-sync mount
+      - ./projects:/app/projects
     restart: unless-stopped

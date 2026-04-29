@@ -5,10 +5,22 @@ import { State } from './State.js';
 import { rebuildCity } from './CityEngine.js';
 import { loadSLAFromProject, renderZoneSliders, renderNodeOverrides, updateSyncHUD } from './UIManager.js';
 import { updateFires } from './CityEngine.js';
+import { dashboardManager } from './DashboardManager.js';
 
 // Helper function to check if cinema mode is active (checks body class)
 function isCinemaMode() {
   return document.body.classList.contains('cinema-mode');
+}
+
+window.initLivePipelineStatus = initLivePipelineStatus;
+
+let _livePipelineRefreshTimer = null;
+function refreshLivePipelineStatusDebounced(delayMs = 180) {
+  if (_livePipelineRefreshTimer) clearTimeout(_livePipelineRefreshTimer);
+  _livePipelineRefreshTimer = setTimeout(() => {
+    _livePipelineRefreshTimer = null;
+    initLivePipelineStatus();
+  }, delayMs);
 }
 
 // ── Drag & Drop upload ─────────────────────────────────
@@ -91,6 +103,8 @@ export async function dzLaunch() {
     if (json.project) { localStorage.setItem('dagcity_active_project', json.project); console.log('[📁] Project saved:', json.project); }
     clearInterval(msgTimer);
     lblEl.textContent = `CITY READY — ${json.nodes.length} BUILDINGS DETECTED`;
+    dashboardManager.hideDashboard();
+    dashboardManager.addBackToMenuButton();
     await _dzHideOverlay();
     rebuildCity(json, false);
   } catch(err) {
@@ -167,6 +181,18 @@ export async function autoRestoreProject() {
 // ── Live Sync (SSE) ────────────────────────────────────
 let _evtSource = null;
 
+function isLiveSessionActive() {
+  try {
+    if (localStorage.getItem('dagcity_is_live') === 'true') return true;
+    const raw = localStorage.getItem('dagcity_live_sync_session');
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return parsed && parsed.mode === 'live_sync';
+  } catch (_) {
+    return false;
+  }
+}
+
 export async function initLiveSync() {
   if (_evtSource) return; // Already connected
 
@@ -185,8 +211,14 @@ export async function initLiveSync() {
       const msg = JSON.parse(event.data);
       if (msg.type === 'update') {
         const active = localStorage.getItem('dagcity_active_project');
-        // If it's a specific project or the 'live' project signal
-        if (msg.project === active || msg.project === 'live') {
+        const liveSession = isLiveSessionActive();
+        // For explicit project updates: allow only active project updates.
+        // For special "live" updates: allow only while a live session is active.
+        const shouldApply =
+          (msg.project === active) ||
+          (msg.project === 'live' && liveSession);
+
+        if (shouldApply) {
           console.log(`[📡] Live update detected: ${msg.project}`);
           
           // If it's the live project, we use launch-local to re-sync
@@ -201,7 +233,10 @@ export async function initLiveSync() {
             .catch(err => console.error('[📡] Live update fetch failed:', err));
         }
       } else {
-        rebuildCity(msg, true);
+        // Generic SSE payloads should not hijack non-live sessions.
+        if (isLiveSessionActive()) {
+          rebuildCity(msg, true);
+        }
       }
     } catch(e) { console.warn('[📡] Live Sync parse error:', e); }
   };
@@ -231,11 +266,27 @@ export async function connectLocal() {
         if (cityData.project) {
           localStorage.setItem('dagcity_active_project', cityData.project);
           localStorage.setItem('dagcity_is_live', 'true');
+          localStorage.setItem('dagcity_live_sync_session', JSON.stringify({
+            mode: 'live_sync',
+            project: cityData.project,
+            connectedAt: Date.now(),
+          }));
         }
+        // Live Sync must use its own UI transition path and not leak into normal project behavior.
+        // This keeps menu/back button/sidebar behavior consistent with regular project loads.
+        dashboardManager.hideDashboard();
+        dashboardManager.addBackToMenuButton();
+
         await _dzHideOverlay();
         rebuildCity(cityData, false);
         initLiveSync();
         updateSyncHUD('live_sync');
+
+        // Never auto-open the right node sidebar for live sync unless a node is selected.
+        const sidebar = document.getElementById('sidebar');
+        const sbContent = document.getElementById('sb-content');
+        if (sidebar) sidebar.classList.remove('open');
+        if (sbContent) sbContent.innerHTML = '';
       } else {
         throw new Error('Launch failed');
       }
@@ -255,17 +306,51 @@ export async function connectLocal() {
 
 export async function initLivePipelineStatus() {
   const lpStatus = document.getElementById('lp-status');
+  const btn = document.getElementById('btn-connect-local');
   if (!lpStatus) return;
+
   try {
+    const statusRes = await fetch('/api/status');
+    const status = await statusRes.json();
+
+    // If the current HOST_PROJECT_PATH project is already registered, block create/reconnect from menu.
+    // Distinguish active live session vs existing created project.
+    if (status.live_project_registered) {
+      const liveActive = isLiveSessionActive();
+      lpStatus.textContent = '✓ ALREADY CONNECTED';
+      lpStatus.style.color = '#39ff14';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '✅ ALREADY CONNECTED';
+        btn.title = liveActive
+          ? 'Blocked: already connected to this Live Sync project.'
+          : 'Blocked: this Live Sync project is already created. Load it from Projects.';
+        btn.style.boxShadow = '0 0 24px rgba(57,255,20,0.22)';
+        btn.style.borderColor = 'rgba(57,255,20,0.85)';
+        btn.style.background = 'linear-gradient(90deg, rgba(57,255,20,0.22), rgba(0,243,255,0.14))';
+        btn.style.color = '#e9ffe8';
+      }
+      return;
+    }
+
+    if (!status.live_project_registered) {
+      localStorage.removeItem('dagcity_is_live');
+      localStorage.removeItem('dagcity_live_sync_session');
+    }
+
     const res = await fetch('/api/check-local');
     const data = await res.json();
     if (data.status === 'ready') {
       lpStatus.textContent = '✓ LIVE SYNC READY — CONNECTING…';
       lpStatus.style.color = '#39ff14';
-      const btn = document.getElementById('btn-connect-local');
       if (btn) { 
+        btn.disabled = false;
+        btn.textContent = 'CONNECT LOCAL';
+        btn.title = 'Connect to local Live Sync project';
         btn.style.boxShadow = '0 0 50px rgba(57,255,20,0.35)';
         btn.style.borderColor = '#39ff14';
+        btn.style.background = '';
+        btn.style.color = '';
       }
       
       // Zero-Friction: We no longer auto-connect on boot to allow users to see the landing screen
@@ -275,8 +360,36 @@ export async function initLivePipelineStatus() {
       lpStatus.textContent = '❌ MANIFEST NOT FOUND — CLICK FOR HELP';
       lpStatus.style.color = '#ff4444';
       lpStatus.style.opacity = '1';
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'CONNECT LOCAL';
+        btn.title = 'Connect to local Live Sync project';
+        btn.style.boxShadow = '';
+        btn.style.borderColor = '';
+        btn.style.background = '';
+        btn.style.color = '';
+      }
     }
   } catch(e) {
     lpStatus.textContent = 'ENVIRONMENT CHECK FAILED';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'CONNECT LOCAL';
+      btn.title = 'Connect to local Live Sync project';
+      btn.style.boxShadow = '';
+      btn.style.borderColor = '';
+      btn.style.background = '';
+      btn.style.color = '';
+    }
   }
 }
+
+// Keep the live connect button/label in sync after project list mutations
+// (create/delete/rename/load) without requiring a page reload.
+window.addEventListener('focus', () => {
+  refreshLivePipelineStatusDebounced();
+});
+
+window.addEventListener('storage', () => {
+  refreshLivePipelineStatusDebounced();
+});

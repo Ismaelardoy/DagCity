@@ -41,6 +41,27 @@ def _is_live_project_enabled(project_name: str, meta: dict) -> bool:
         return False
     return project_name == current_live
 
+def _downgrade_stale_live_project(project_dir: str, project_name: str, meta: dict) -> dict:
+    """Convert stale live project into an offline snapshot while preserving files."""
+    if meta.get("source") != "live_sync":
+        return meta
+    if _is_live_project_enabled(project_name, meta):
+        return meta
+
+    updated = dict(meta)
+    updated["source"] = "offline"
+    updated["was_live_sync"] = True
+    updated["live_sync_inactive_reason"] = "Live source changed or unavailable"
+    updated["last_live_source_path"] = meta.get("original_path")
+
+    try:
+        meta_path = os.path.join(project_dir, "meta.json")
+        with open(meta_path, "w") as f:
+            json.dump(updated, f, indent=2)
+    except Exception:
+        pass
+    return updated
+
 @router.get("")
 async def list_projects():
     """Returns list of saved projects with metadata."""
@@ -60,6 +81,8 @@ async def list_projects():
             if os.path.exists(meta_path):
                 with open(meta_path) as f:
                     meta = json.load(f)
+
+            meta = _downgrade_stale_live_project(project_dir, name, meta)
 
             disabled = not _is_live_project_enabled(name, meta)
             reason = ""
@@ -95,6 +118,9 @@ async def get_project(name: str):
             meta = json.load(f)
             is_live = meta.get("source") == "live_sync"
 
+    meta = _downgrade_stale_live_project(os.path.join(PROJECTS_DIR, name), name, meta)
+    is_live = meta.get("source") == "live_sync"
+
     if is_live and not _is_live_project_enabled(name, meta):
         raise HTTPException(status_code=423, detail="Live Sync project is inactive (source changed).")
             
@@ -109,6 +135,16 @@ async def get_project(name: str):
     else:
         with open(graph_path) as f:
             data = json.load(f)
+
+    # Guarantee source metadata for frontend HUD label consistency.
+    # graph.json may not always carry source, but meta.json is the source of truth.
+    if not isinstance(data.get("metadata"), dict):
+        data["metadata"] = {}
+    data["metadata"]["source"] = meta.get("source", "offline")
+    if meta.get("source") == "offline" and meta.get("was_live_sync"):
+        data["metadata"]["sync_source"] = "live_snapshot"
+    else:
+        data["metadata"]["sync_source"] = data["metadata"]["source"]
             
     # Attach saved SLA config if it exists
     sla_path = os.path.join(PROJECTS_DIR, name, "sla.json")

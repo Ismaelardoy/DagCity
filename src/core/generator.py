@@ -128,6 +128,23 @@ body { background: #000; overflow: hidden; font-family: 'Courier New', monospace
   right: 460px;
 }
 
+/* Robust sidebar-aware shift (works regardless of DOM sibling order) */
+body.right-sidebar-open #btn-global-view {
+  right: 460px;
+}
+body.right-sidebar-open #btn-tactical-map {
+  right: 512px;
+}
+body.right-sidebar-open #back-to-menu {
+  right: 572px !important;
+}
+body.right-sidebar-open #city-radar-hud {
+  right: 468px !important;
+}
+body.right-sidebar-open #city-radar-legend {
+  right: 468px !important;
+}
+
 /* ── Cinema Mode - Master Class Solution ── */
 body.cinema-mode-active #header,
 body.cinema-mode-active #subtitle,

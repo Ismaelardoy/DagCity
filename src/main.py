@@ -104,11 +104,21 @@ def _autodiscover_project_name(manifest_dict: dict) -> str:
 @app.get("/api/status")
 async def get_status():
     """Reports the server status and Live Sync availability."""
+    live_available = is_live_sync_available()
+    current_live_name = _current_live_project_name() if live_available else None
+    live_project_registered = False
+
+    if current_live_name and os.path.exists(PROJECTS_DIR):
+        meta_path = os.path.join(PROJECTS_DIR, current_live_name, "meta.json")
+        live_project_registered = os.path.exists(meta_path)
+
     return {
         "version": "1.0",
-        "live_sync_available": is_live_sync_available(),
-        "external_path": config.EXTERNAL_MANIFEST_PATH if is_live_sync_available() else None,
-        "projects_count": len(os.listdir(PROJECTS_DIR)) if os.path.exists(PROJECTS_DIR) else 0
+        "live_sync_available": live_available,
+        "external_path": config.EXTERNAL_MANIFEST_PATH if live_available else None,
+        "projects_count": len(os.listdir(PROJECTS_DIR)) if os.path.exists(PROJECTS_DIR) else 0,
+        "current_live_project": current_live_name,
+        "live_project_registered": live_project_registered,
     }
 
 @app.get("/api/check-local")
@@ -139,19 +149,20 @@ async def launch_local():
         # 2. Auto-persist internally so we can save SLAs etc.
         project_name = _autodiscover_project_name(m_dict)
         
-        # Check for collisions and increment name if needed (to avoid overwriting snapshots)
+        # Check for collisions and increment name if needed.
+        # If the same project name already exists as a downgraded snapshot from live_sync,
+        # reuse it and promote it back to live_sync directly.
         base_name = project_name
         counter = 1
         while os.path.exists(os.path.join(PROJECTS_DIR, project_name)):
-            # If it's already a live_sync project, we might want to overwrite it 
-            # but to be safe and match user expectation of "creating" a project, let's increment
-            # unless it's the EXACT same project name and source.
             meta_path = os.path.join(PROJECTS_DIR, project_name, "meta.json")
             if os.path.exists(meta_path):
                 with open(meta_path) as f:
                     old_meta = json.load(f)
                     if old_meta.get("source") == "live_sync":
-                        break # Overwrite existing live sync project of same name
+                        break  # overwrite current live project of same name
+                    if old_meta.get("was_live_sync") and old_meta.get("source") == "offline":
+                        break  # revive previous live snapshot when host path comes back
             
             project_name = f"{base_name}_{counter}"
             counter += 1

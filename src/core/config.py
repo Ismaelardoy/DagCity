@@ -2,8 +2,10 @@ import os
 
 # Internal Storage (Inside the container)
 VIZ_DIR = "/app/viz_output"
-PROJECTS_DIR = os.environ.get("PROJECTS_DIR", "/data/projects")
-WORKSPACE_PATH = os.environ.get("WORKSPACE_PATH", "/data/workspace.json")
+# PROJECTS_DIR moved outside /data to prevent deletion when HOST_PROJECT_PATH changes
+# This separates saved projects from live sync volume
+PROJECTS_DIR = os.environ.get("PROJECTS_DIR", "/app/projects")
+WORKSPACE_PATH = os.environ.get("WORKSPACE_PATH", "/app/workspace.json")
 
 # External Data (Optional Volume)
 DEFAULT_MANIFEST_PATH = "/data/target/manifest.json"

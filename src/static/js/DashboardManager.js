@@ -129,6 +129,8 @@ class DashboardManager {
               nodeCount: p.node_count || 0,
               edgeCount: p.link_count || 0,
               sourceType: 'server',
+              source: p.source || 'offline',
+              wasLiveSync: !!p.was_live_sync,
             }));
             console.log('[DashboardManager] IndexedDB empty, using server projects:', projects.length, projects);
           }
@@ -179,7 +181,14 @@ class DashboardManager {
         `;
         card.innerHTML = `
           <div class="project-card-info" style="flex: 1; min-width: 0;">
-            <div class="project-card-name" style="color: #fff; font-weight: 600; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${project.name}</div>
+            <div class="project-card-name" style="color: #fff; font-weight: 600; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+              ${project.name}
+              ${project.source === 'live_sync' || project.source === 'local_sync'
+                ? '<span style="margin-left:8px;color:#39ff14;font-size:10px;letter-spacing:1px;border:1px solid rgba(57,255,20,0.45);border-radius:10px;padding:2px 6px;vertical-align:middle;">LIVE SYNC</span>'
+                : (project.source === 'offline' && project.wasLiveSync
+                  ? '<span style="margin-left:8px;color:#ffb347;font-size:10px;letter-spacing:1px;border:1px solid rgba(255,179,71,0.45);border-radius:10px;padding:2px 6px;vertical-align:middle;">LIVE (SNAPSHOT)</span>'
+                  : '')}
+            </div>
             <div class="project-card-meta" style="color: rgba(255,255,255,0.6); font-size: 11px;">
               ${project.nodeCount} nodes · ${project.edgeCount} edges
             </div>
@@ -457,6 +466,19 @@ class DashboardManager {
 
     this.currentProject = null;
     this.is3DViewActive = false;
+
+    // Reset transient UI state (especially important after Live Sync sessions)
+    // without affecting persisted normal project data.
+    localStorage.removeItem('dagcity_is_live');
+    localStorage.removeItem('dagcity_live_sync_session');
+
+    const sidebar = document.getElementById('sidebar');
+    const sbContent = document.getElementById('sb-content');
+    if (sidebar) sidebar.classList.remove('open');
+    if (sbContent) sbContent.innerHTML = '';
+
+    const jumpPanel = document.getElementById('global-island-jump-panel');
+    if (jumpPanel) jumpPanel.classList.remove('open');
 
     // Remove back to menu button
     this.removeBackToMenuButton();
