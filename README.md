@@ -317,12 +317,11 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 | Key | Action |
 |---|---|
 | `G` | Global View — cinematic orbit of the entire city |
-| `M` | Global Tactical Map overlay |
+| `M` | Global Map overlay |
 | `V` | Cinema Mode — hide all UI for clean recording |
 | `Esc` | Deselect / close panels |
 | `⌘K` / `Ctrl+K` | Omni Search — find any node instantly |
 | `Click` node | Focus + lineage highlight |
-| `Double-click` node | Full upstream/downstream blast radius |
 
 ---
 
