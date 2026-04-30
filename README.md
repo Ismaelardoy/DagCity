@@ -244,6 +244,7 @@ DagCity/
 │       ├── Visualizer.js        # Three.js scene init, bloom post-processing
 │       ├── StorageManager.js    # SLA persistence, project metadata
 │       └── DAGView2D.js         # 2D schematic overlay renderer
+├── test/                        # Test files and test utilities
 ├── Dockerfile                   # python:3.12-slim, uvicorn entrypoint
 ├── docker-compose.yml           # Volume-aware compose with HOST_PROJECT_PATH
 └── requirements.txt             # fastapi · uvicorn · watchdog · sse-starlette
@@ -373,7 +374,7 @@ API keys are stored in `localStorage` only. No server-side key handling.
 
 <!-- SCREENSHOT 5: AI Copilot — showing the AI chat panel open on the right with a conversation about a bottleneck node, and the JSON response with FOCUS_NODE action. The DAG context should be visible in the prompt preview. -->
 <div align="center">
-<img src="images/dagcity_ai_copilot.png" width="860" alt="AI Copilot — Chat panel with DAG context and FOCUS_NODE action" style="border-radius:10px;"/>
+<img src="images/dagcity_ai_copilot.png" width="860" alt="AI Copilot — Chat panel" style="border-radius:10px;"/>
 </div>
 
 ---
