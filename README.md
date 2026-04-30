@@ -332,16 +332,10 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 
 ---
 
-<!-- SCREENSHOT 4A: Dashboard menu showing the CONNECT LOCAL button enabled when a live manifest is detected. -->
-<div align="center">
-<img src="images/dagcity_live_sync_connect.png" width="860" alt="Live Sync — CONNECT LOCAL button in dashboard" style="border-radius:10px;"/>
-<p style="font-size:0.9em; color:#888; margin-top:8px;">The CONNECT LOCAL button appears when a live manifest is detected at the mounted volume path.</p>
-</div>
-
 <!-- SCREENSHOT 4B: Terminal showing "dbt run" output with manifest.json and run_results.json being written. -->
 <div align="center">
 <img src="images/dagcity_live_sync_terminal.png" width="860" alt="Live Sync — Terminal dbt run output" style="border-radius:10px;"/>
-<p style="font-size:0.9em; color:#888; margin-top:8px;">Terminal output showing dbt run generating manifest.json and run_results.json files.</p>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">The CONNECT LOCAL button appears when a live manifest is detected at the mounted volume path.</p>
 </div>
 
 <!-- SCREENSHOT 4C: DagCity browser showing the city with the LIVE SYNC indicator active in the HUD (top-right badge reads "LIVE SYNC ACTIVE"). -->
