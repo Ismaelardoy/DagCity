@@ -16,8 +16,7 @@
 
 <!-- SCREENSHOT 1: Full city overview — aerial view of the 3D city with multiple islands, glowing neon buildings and inter-island arcs. Capture this from a high orbit angle showing the entire DAG City layout with all sectors visible. -->
 <img src="images/dagcity_overview.png" width="900" alt="DagCity — 3D Overview" style="border-radius:12px; border: 1px solid #ff00ff44; box-shadow: 0 0 40px #ff00ff22;"/>
-
-*A DAG of 900+ dbt models rendered as a neon-lit metropolis. Each building is a node. Each glowing arc is a dependency.*
+<p style="font-size:0.9em; color:#888; margin-top:8px;">A DAG of 900+ dbt models rendered as a neon-lit metropolis. Each building is a node. Each glowing arc is a dependency.</p>
 
 </div>
 
@@ -105,6 +104,7 @@ Height is computed using a **logarithmic scale** with a gamma-corrected, blended
 <!-- SCREENSHOT 2: Volume Analytics / Data Swell — close-up of a sector with varying building heights, showing tall skyscrapers for slow/heavy nodes next to short buildings. Capture with the SLA panel open showing the fire count badge and the slider controls. -->
 <div align="center">
 <img src="images/dagcity_volume_analytics.png" width="860" alt="Volume Analytics — Building Heights & Data Swell" style="border-radius:10px;"/>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">Building height encodes execution time from run_results.json. Tall skyscrapers indicate slow/heavy nodes.</p>
 </div>
 
 ---
@@ -142,6 +142,7 @@ VFX is gated by `State.perfMode` and `State.showParticles` — zero overhead whe
 <!-- SCREENSHOT 3: SLA Fire Violations — a cluster of buildings burning with smoke and fire particles. The SLA panel should be open on the left showing the fire count badge (e.g., "3 NODES ON FIRE") and the threshold sliders. Ideally capture during a live dbt run so nodes are actively transitioning. -->
 <div align="center">
 <img src="images/dagcity_sla_fire.png" width="860" alt="SLA Violations — Thermal VFX on Bottleneck Nodes" style="border-radius:10px;"/>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">Nodes exceeding SLA thresholds emit smoke, sparks, and fire. The thermal VFX system escalates based on execution time ratio.</p>
 </div>
 
 ---
@@ -331,23 +332,34 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 
 ---
 
-<!-- SCREENSHOT 4A: Terminal showing "dbt run" output with manifest.json and run_results.json being written. -->
+<!-- SCREENSHOT 4A: Dashboard menu showing the CONNECT LOCAL button enabled when a live manifest is detected. -->
 <div align="center">
-<img src="images/dagcity_live_sync_terminal.png" width="860" alt="Live Sync — Initialization" style="border-radius:10px;"/>
+<img src="images/dagcity_live_sync_connect.png" width="860" alt="Live Sync — CONNECT LOCAL button in dashboard" style="border-radius:10px;"/>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">The CONNECT LOCAL button appears when a live manifest is detected at the mounted volume path.</p>
 </div>
 
-<!-- SCREENSHOT 4B: DagCity browser showing the city with the LIVE SYNC indicator active in the HUD (top-right badge reads "LIVE SYNC ACTIVE"). -->
+<!-- SCREENSHOT 4B: Terminal showing "dbt run" output with manifest.json and run_results.json being written. -->
+<div align="center">
+<img src="images/dagcity_live_sync_terminal.png" width="860" alt="Live Sync — Terminal dbt run output" style="border-radius:10px;"/>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">Terminal output showing dbt run generating manifest.json and run_results.json files.</p>
+</div>
+
+<!-- SCREENSHOT 4C: DagCity browser showing the city with the LIVE SYNC indicator active in the HUD (top-right badge reads "LIVE SYNC ACTIVE"). -->
 <div align="center">
 <img src="images/dagcity_live_sync_browser.png" width="860" alt="Live Sync — City initial view with LIVE SYNC ACTIVE badge" style="border-radius:10px;"/>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">City initial view after connecting to Live Sync with the LIVE SYNC ACTIVE badge visible.</p>
 </div>
 
+<!-- SCREENSHOT 4D: City rebuilding in real-time after a dbt run update. -->
 <div align="center">
 <img src="images/dagcity_live_sync_browser_2.png" width="860" alt="Live Sync — City after update with LIVE SYNC ACTIVE badge" style="border-radius:10px;"/>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">City automatically rebuilding after detecting manifest.json changes from dbt run.</p>
 </div>
 
-<!-- SCREENSHOT 4C: Close-up of the sync status badge showing "LIVE SYNC ACTIVE" and the city rebuilding in real-time. -->
+<!-- SCREENSHOT 4E: Close-up of the sync status badge showing "LIVE SYNC ACTIVE" and the city rebuilding in real-time. -->
 <div align="center">
 <img src="images/dagcity_live_sync_badge.png" width="860" alt="Live Sync — LIVE SYNC ACTIVE badge detail" style="border-radius:10px;"/>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">Close-up of the LIVE SYNC ACTIVE badge in the HUD showing real-time sync status.</p>
 </div>
 
 ---
@@ -379,6 +391,7 @@ API keys are stored in `localStorage` only. No server-side key handling.
 <!-- SCREENSHOT 5: AI Copilot — showing the AI chat panel open on the right with a conversation about a bottleneck node, and the JSON response with FOCUS_NODE action. The DAG context should be visible in the prompt preview. -->
 <div align="center">
 <img src="images/dagcity_ai_copilot.png" width="860" alt="AI Copilot — Chat panel" style="border-radius:10px;"/>
+<p style="font-size:0.9em; color:#888; margin-top:8px;">AI chat panel with DAG context injection. The assistant can navigate to nodes using FOCUS_NODE actions.</p>
 </div>
 
 ---
