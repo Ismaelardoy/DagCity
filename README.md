@@ -1,144 +1,404 @@
-# 🏙️ DagCity — dbt Observability Engine
+<div align="center">
 
-> **"Your dbt project is a city. DagCity is its aerial view."**
+# 🏙️ DAG CITY
 
-DagCity is an open-source, containerized **3D data lineage visualizer** for [dbt](https://www.getdbt.com/) projects. It parses your `manifest.json`, classifies every model by architectural layer, and renders an interactive cyberpunk-style city where **buildings are models**, **streets are data pipelines**, and **fire means your pipeline is on fire** (performance bottleneck detected).
+<img src="https://img.shields.io/badge/version-1.0-ff00ff?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyTDIgN2wxMCA1IDEwLTV6TTIgMTdsNiAzbDItMXYybC04IDR6TTE0IDE5bDItMXYybDYtM3YtOGwtOCA0eiIvPjwvc3ZnPg==" alt="Version"/>
+<img src="https://img.shields.io/badge/Python-3.12-00f3ff?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
+<img src="https://img.shields.io/badge/Three.js-r134-00f3ff?style=for-the-badge&logo=threedotjs&logoColor=white" alt="Three.js"/>
+<img src="https://img.shields.io/badge/FastAPI-0.110-39ff14?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI"/>
+<img src="https://img.shields.io/badge/Docker-Ready-00f3ff?style=for-the-badge&logo=docker&logoColor=white" alt="Docker"/>
+<img src="https://img.shields.io/badge/License-MIT-ff00ff?style=for-the-badge" alt="License"/>
+
+**Transform your dbt DAG into a living, breathing 3D metropolis.**  
+*Volume Analytics · SLA Violation Detection · Live Sync Protocol · Data Mesh Archipelago*
 
 ---
 
-## ✨ Feature Highlights
+<!-- SCREENSHOT 1: Full city overview — aerial view of the 3D city with multiple islands, glowing neon buildings and inter-island arcs. Capture this from a high orbit angle showing the entire DAG City layout with all sectors visible. -->
+<img src="images/dagcity_overview.png" width="900" alt="DagCity — 3D Overview" style="border-radius:12px; border: 1px solid #ff00ff44; box-shadow: 0 0 40px #ff00ff22;"/>
 
-| Feature | Details |
+*A DAG of 200+ dbt models rendered as a neon-lit metropolis. Each building is a node. Each glowing arc is a dependency.*
+
+</div>
+
+---
+
+## 🧠 The Concept
+
+Most data teams navigate their dbt lineage through flat YAML files or 2D network graphs. DAG City takes a radically different approach: it compiles your `manifest.json` into a **fully interactive 3D city**, where the skyline encodes your pipeline's performance at a glance.
+
+> **No more invisible bottlenecks.** If a model is slow, its building is tall and on fire.  
+> **No more lost lineage.** Every dependency is an arc of light connecting two buildings.  
+> **No more stale dashboards.** The city rebuilds itself the moment your dbt run finishes.
+
+---
+
+## ✦ Feature Matrix
+
+| System | What It Does |
 |---|---|
-| **3D City Rendering** | Real-time Three.js scene with OrbitControls, damping, auto-rotate |
-| **Architectural Layers** | Source → Staging → Intermediate → Mart → Consumption, colour-coded |
-| **Performance Profiler** | Building height ∝ execution time; toggle 3D Performance Mode |
-| **Bottleneck Detection** | Statistical outlier engine (Mean + 1.5×StdDev); displays fire particle effect |
-| **Ghost Protocol** | Detects dead-end Staging/Intermediate models (no downstream consumers) |
-| **Deep-Dive Sidebar** | Click any building → full node metadata, schema columns, execution time |
-| **Lineage Highlighting** | Click-to-trace full upstream/downstream lineage with particle emphasis |
-| **Smart HUD** | Camera navigation guide with cyberpunk discovery hint |
-| **Awaiting Data Mode** | Container stays alive with Drag & Drop overlay if no `manifest.json` is found |
+| **Volume Analytics** | Building height and width encode execution time, row count, or SQL complexity |
+| **SLA Violations / Performance 3D** | Nodes exceeding latency thresholds emit smoke → sparks → fire in real-time |
+| **Live Sync Protocol** | Docker volume watcher + SSE stream rebuilds the city on every `dbt run` |
+| **Data Mesh Archipelago** | Multi-project DAGs render as isolated islands with inter-island arcs |
+| **Ghost Protocol / Focus Mode** | Vantablack isolation of upstream/downstream lineage paths |
+| **Tactical Radar HUD** | Local minimap + Global Tactical Map overlay for navigation |
+| **Cinema Mode** | Press `V` for a clean, full-screen cinematic rendering of the city |
+| **AI Copilot** | Embedded chat (OpenAI / Groq) with DAG context injection and `FOCUS_NODE` action |
+| **2D Schematic Mode** | Toggle to a flat network diagram with cluster expansion |
+| **Multi-Project Manager** | Persist, switch, and compare multiple dbt projects in a single instance |
 
 ---
 
-## 🚀 Quickstart
+## 🏙️ Volume Analytics
 
-### Prerequisites
+> *"The skyline doesn't lie."*
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- A dbt project with a compiled `manifest.json` (run `dbt compile` or `dbt run`)
+Every building in DAG City is a **direct physical encoding of your pipeline's data.**
 
-### 1. Clone the repo
+```
+Building HEIGHT  = f(execution_time)  ← pulled directly from run_results.json
+Building WIDTH   = f(row_count | sql_length | connections)  — Data Swell mode
+Building COLOR   = dbt layer (source, staging, intermediate, mart, consumption)
+```
+
+> **`run_results.json` is the fuel for the skyline.** Without it, all buildings render as a flat base-plate city (honest — no synthetic data). Drop it alongside `manifest.json` and every model's real wall-clock execution time is encoded into its geometry.
+
+### How `run_results.json` is ingested
+
+The parser reads every `execution_time` field from the `results` array and indexes it by `unique_id`:
+
+```python
+# src/core/parser.py
+for result in run_results.get("results", []):
+    uid = result.get("unique_id", "")
+    t   = result.get("execution_time", 0.0)
+    if uid:
+        run_times[uid] = round(float(t), 3)
+```
+
+The parser then cross-references each node against `run_times`. If a match exists, `time_source` is marked `"real"`; otherwise `"none"` — and the building stays flat. No guessing, no synthetic padding.
+
+**Both paths work seamlessly:**
+
+| Files provided | Result |
+|---|---|
+| `manifest.json` only | City renders — all buildings flat (base-plate aesthetic) |
+| `manifest.json` + `run_results.json` | Full Volume Analytics — heights, bottleneck detection, thermal VFX |
+
+Height is computed using a **logarithmic scale** with a gamma-corrected, blended weight system that prevents extreme outliers from compressing the rest of the skyline. When a model produces 100M+ rows, its building becomes a skyscraper. When it runs in under a second, it stays a flat base plate.
+
+**Data Swell Metrics (selectable in the SLA Panel):**
+
+| Metric | Encoding |
+|---|---|
+| `rows` | Direct row count from `manifest.json` stats/meta, with heuristic fallback |
+| `execution_time` | Wall-clock time from `run_results.json` |
+| `code_length` | SQL/Jinja source length |
+| `connections` | Degree (upstream + downstream count) |
+| `uniform` | Honest flat base-plate (no data = no height) |
+
+> **Design principle:** Synthetic data is prohibited by default. If `run_results.json` is absent, all buildings render flat. A dev-only console hook (`window.enableMarketingMode()`) exists for demo purposes only and never leaks into production builds.
+
+---
+
+<!-- SCREENSHOT 2: Volume Analytics / Data Swell — close-up of a sector with varying building heights, showing tall skyscrapers for slow/heavy nodes next to short buildings. Capture with the SLA panel open showing the fire count badge and the slider controls. -->
+<div align="center">
+<img src="images/dagcity_volume_analytics.png" width="860" alt="Volume Analytics — Building Heights & Data Swell" style="border-radius:10px;"/>
+</div>
+
+---
+
+## 🔥 Performance 3D & SLA Violations
+
+DAG City's thermal VFX system is a **three-stage escalation engine** tied to a configurable SLA ratio:
+
+```
+ratio = node.execution_time / sla_threshold
+
+ratio ≥ 1.0  →  💨  Smoke particles rise from the rooftop
+ratio ≥ 1.2  →  ⚡  Electric sparks + emissive pulse on the building material
+ratio ≥ 1.5  →  🔥  Fire sprites engulf the structure — node is BURNING
+```
+
+SLA thresholds are configurable at **three granularity levels**, all persisted per-project in `localStorage`:
+
+1. **Global SLA** — default baseline for all nodes (editable inline, default: 120s)
+2. **Zone SLA** — per-layer overrides (`source`, `staging`, `intermediate`, `mart`)
+3. **Node SLA** — surgical per-model overrides with fuzzy-search selector
+
+The bottleneck detection engine runs server-side in `parser.py` using a **statistical outlier algorithm** (Mean + 1.5 × StdDev), flagging the top performers before the graph even reaches the browser.
+
+```python
+# src/core/parser.py — Phase 3: Statistical Bottleneck Flagging
+threshold = mean_time + (1.5 * stdev_time)
+node["is_bottleneck"] = node["execution_time"] > threshold and node["execution_time"] > 0
+```
+
+VFX is gated by `State.perfMode` and `State.showParticles` — zero overhead when Performance Mode is off.
+
+---
+
+<!-- SCREENSHOT 3: SLA Fire Violations — a cluster of buildings burning with smoke and fire particles. The SLA panel should be open on the left showing the fire count badge (e.g., "3 NODES ON FIRE") and the threshold sliders. Ideally capture during a live dbt run so nodes are actively transitioning. -->
+<div align="center">
+<img src="images/dagcity_sla_fire.png" width="860" alt="SLA Violations — Thermal VFX on Bottleneck Nodes" style="border-radius:10px;"/>
+</div>
+
+---
+
+## 🌐 Data Mesh Archipelago & Sector Mapping
+
+For multi-package or multi-project architectures, DAG City renders each logical domain as a **separate island** floating in the void.
+
+### Island Grouping — Hybrid Rules Engine
+
+The `ManifestParser` classifies every node into an island using a **priority-ordered rules engine:**
+
+```
+Rule 0 → Mart nodes          → Island: "MARTS"
+Rule 1 → Sources / Seeds     → Island: "SOURCES" / "SEEDS"
+Rule 2 → External packages   → Island: package_name.upper()  (e.g., "JAFFLE_ENTERPRISE")
+Rule 3 → Monolith folders    → Island: fqn[1].upper() or models/ subfolder
+Rule 4 → Fallback            → Island: "CORE"
+```
+
+Cross-island data flows render as **high-altitude Massive Aerial Arches** — Bezier curves that peak at `Y = max(400, dist × 0.35)` — making cross-domain dependencies visible at any zoom level.
+
+Island transitions trigger camera tweens (1500ms ease-in-out-cubic) with automatic framing based on island radius. Navigation is available via:
+
+- **Radar HUD** — local minimap showing nearby islands within 3000 world units
+- **Global Tactical Map** (`M` key) — full-world overhead map with click-to-fast-travel
+- **Island Jump Panel** — sidebar list of all sectors with one-click flyover
+- **Omni Search** (`⌘K` / `Ctrl+K`) — fuzzy-search across all nodes
+
+```
+┌─────────────┐     Aerial Arc     ┌──────────────────────┐
+│  SOURCES    │ ──────────────────▶ │  JAFFLE_ENTERPRISE   │
+│  (island)   │                    │  (island)            │
+└─────────────┘                    └──────────────────────┘
+```
+
+---
+
+## 📡 Live Sync Protocol
+
+The Live Sync Protocol is a **zero-configuration, file-system-event-driven** real-time update pipeline:
+
+```
+dbt run / dbt compile
+      │
+      ▼
+  manifest.json updated on disk
+      │
+      ▼
+  ManifestWatcher (watchdog PollingObserver, 1s interval, debounced 500ms)
+      │
+      ▼
+  FastAPI SSE endpoint /api/live-stream broadcasts {type: "update", project: "..."}
+      │
+      ▼
+  Browser EventSource receives message → _applyLiveUpdateWithRetry()
+      │
+      ▼
+  rebuildCity(data, isLive=true) → Three.js scene updates in-place
+```
+
+**Key design decisions:**
+- `PollingObserver` (not `inotify`) ensures cross-platform compatibility inside Docker on macOS/Windows hosts
+- Debounce (500ms) prevents partial-read race conditions during large manifest writes
+- Client-side retry logic (up to 4 attempts, exponential backoff starting at 700ms) handles transient HTTP errors during heavy dbt runs
+- SSE reconnects automatically after 5s on connection loss
+
+### One-Click Live Connect
 
 ```bash
-git clone https://github.com/Ismaelardoy/DagCity.git
-cd DagCity
+# Mount your dbt project and start DagCity — it finds the manifest automatically
+HOST_PROJECT_PATH=/path/to/your/dbt_project docker compose up
 ```
 
-### 2. Configure `.env`
-
-Edit `.env` to point at your dbt project:
-
-```dotenv
-# Absolute path to your dbt project root on the HOST machine
-HOST_PROJECT_PATH=C:/Users/you/projects/jaffle_shop
-
-# Relative path from that root to manifest.json
-# Default dbt location: target/manifest.json
-MANIFEST_SUBPATH=target/manifest.json
-
-# Port exposed by the visualizer
-PORT=8080
-```
-
-> **Tip:** If you leave `HOST_PROJECT_PATH` unconfigured, the container still starts in **Awaiting Data** mode — no crash, no exit code 1.
-
-### 3. Launch
-
-```bash
-docker compose up --build
-```
-
-Open your browser at **http://localhost:8080**
+The server-side `autodiscover_manifest()` function performs a deep search of `/data` on startup. The UI polls `/api/check-local` and enables the **CONNECT LOCAL** button when a live manifest is detected. No manual path configuration required.
 
 ---
 
-## 🛡️ Resilience & "Awaiting Data" Mode
-
-DagCity is designed to **never crash due to missing data**. The startup logic follows a safety-first policy:
-
-```
-manifest.json found?
-  ├─ YES → Parse → Render full 3D city
-  └─ NO  → [INFO] No local manifest found. Starting in 'Awaiting Data' mode...
-             → Serve empty city with Drag & Drop upload overlay
-             → Container stays alive (restart: unless-stopped)
-```
-
-This means:
-- `docker compose up` always succeeds regardless of `.env` configuration.
-- Users can interact with the **Drag & Drop** overlay in the browser to upload a `manifest.json` directly from their machine.
-- No `sys.exit(1)` on missing data — only unrecoverable server errors will stop the container.
-
----
-
-## 🗂️ Project Structure
+## 🗂️ Architecture
 
 ```
 DagCity/
 ├── src/
-│   ├── main.py               # Orchestrator — resilient startup logic
-│   └── core/
-│       ├── parser.py         # ManifestParser v1.0 — dbt manifest + run_results
-│       └── generator.py      # VizGenerator — Three.js HTML builder + HTTP server
-├── tests/
-│   └── test_parser.py        # Parser unit tests
-├── data/                     # Fallback empty mount (used when HOST_PROJECT_PATH is unset)
-├── Dockerfile                # python:3.12-slim image
-├── docker-compose.yml        # Service definition — no 'version' key (Compose v2)
-├── .env                      # Local configuration (not committed with secrets)
-└── README.md
+│   ├── main.py                  # FastAPI app — routes, startup orchestration, SSE bridge
+│   ├── core/
+│   │   ├── config.py            # Env-aware config + manifest autodiscovery
+│   │   ├── parser.py            # ManifestParser — 5-phase DAG extraction engine
+│   │   ├── generator.py         # VizGenerator — HTML shell with injected graph data
+│   │   ├── watcher.py           # ManifestWatcher — watchdog + asyncio bridge
+│   │   ├── streamer.py          # SSE router — /api/live-stream
+│   │   └── router_projects.py   # Project CRUD — persist/load/delete
+│   └── static/js/
+│       ├── CityEngine.js        # Three.js scene — buildings, arcs, VFX, camera, LOD, DRS
+│       ├── UIManager.js         # All UI panels — SLA, Settings, Architecture, AI chat
+│       ├── DataManager.js       # Fetch, SSE client, drag-drop upload, Live Sync connect
+│       ├── VFXManager.js        # Particle systems — smoke, sparks, fire sprites
+│       ├── State.js             # Reactive singleton — pub/sub, project-scoped localStorage
+│       ├── AIClient.js          # OpenAI / Groq integration with DAG context injection
+│       ├── DashboardManager.js  # Landing screen, project manager modal
+│       ├── Visualizer.js        # Three.js scene init, bloom post-processing
+│       ├── StorageManager.js    # SLA persistence, project metadata
+│       └── DAGView2D.js         # 2D schematic overlay renderer
+├── Dockerfile                   # python:3.12-slim, uvicorn entrypoint
+├── docker-compose.yml           # Volume-aware compose with HOST_PROJECT_PATH
+└── requirements.txt             # fastapi · uvicorn · watchdog · sse-starlette
+```
+
+### Rendering Pipeline
+
+```
+CityEngine.js (Three.js r134)
+  │
+  ├── Geometries:    BoxGeometry per node, QuadraticBezierCurve3 per link
+  ├── Materials:     MeshStandardMaterial (array) — top/side colors per layer
+  ├── Post-FX:       UnrealBloomPass (selective bloom via layers)
+  ├── Labels:        CSS2DRenderer — floating data volume labels
+  ├── VFX:           VFXManager — particle groups per bottleneck node
+  ├── LOD:           Near (full geo) / Medium / Far (billboard imposters) / Monolith
+  ├── DRS:           Dynamic Resolution Scaling — 4-step FPS-adaptive degradation
+  └── Culling:       Frustum + distance culling per island, every 10 frames
 ```
 
 ---
 
-## 🧠 Architecture
+## 🚀 Quick Start
 
-### Parser (`src/core/parser.py`)
+### Option A — Docker (Recommended)
 
-The `ManifestParser` implements a **Sequential Rules Engine** to classify every dbt node:
+```bash
+# Clone
+git clone https://github.com/your-username/DagCity.git
+cd DagCity
 
-```
-Resource Type → Layer Classification
-─────────────────────────────────────
-source / seed  →  source      (#00ff66 green)
-stg_* / staging dir  →  staging    (#ff0077 pink)
-int_* / intermediate dir →  intermediate  (#9d4edd purple)
-fct_* / dim_* / marts dir  →  mart     (#00f2ff cyan)
-exposure / metric  →  consumption  (#ffd700 gold)
-Topological Catch-All (no match):
-  has_downstream → intermediate
-  leaf node      → mart
+# Point at your dbt project and launch
+HOST_PROJECT_PATH=/path/to/your/dbt_project docker compose up --build
 ```
 
-**Bottleneck Detection:**
-- Loads real execution times from `run_results.json` if present (same directory as `manifest.json`).
-- Falls back to deterministic simulated times (MD5-seeded) for demos.
-- Flags nodes where `execution_time > Mean + 1.5 × StdDev` as bottlenecks.
+Open **http://localhost:8080** and click **CONNECT LOCAL**.  
+Run `dbt run` in another terminal — the city rebuilds automatically.
 
-**Ghost Protocol:**
-- Any `staging` or `intermediate` model with **zero downstream consumers** is marked `is_dead_end = True` and rendered as a transparent ghost building with a ⚠️ hazard sprite.
+### Option B — Offline Upload
 
-### Generator (`src/core/generator.py`)
+1. Generate your dbt artifacts:
+   ```bash
+   dbt compile   # produces target/manifest.json
+   dbt run       # produces target/run_results.json  ← required for building heights & fire VFX
+   ```
+2. Open **http://localhost:8080**
+3. Drag & drop **both files** onto the **LAUNCH ZONE** — the city renders in seconds.
 
-The `VizGenerator` embeds graph data as a JSON payload inside a self-contained HTML file served by Python's `ThreadingHTTPServer`. The full Three.js scene (3000+ LOC of JavaScript) is inlined.
+> You can drop either file independently. `manifest.json` alone gives you the full topology. Add `run_results.json` and the skyline comes alive with real performance data.
 
-Key rendering systems:
-- **Procedural building textures** — CanvasTexture with neon grid, scanlines, bracket corners
-- **Flame particle system** — 64-sprite pyramid fire for bottleneck nodes
-- **Bezier edge curves** — Animated particle flow along `QuadraticBezierCurve3`
-- **Drone navigation** — OrbitControls with WASD fly mode, configurable damping
+**Where to find the files after `dbt run`:**
+```
+your_dbt_project/
+└── target/
+    ├── manifest.json       ← DAG topology, columns, descriptions, layer info
+    └── run_results.json    ← Execution times per model (the skyline fuel)
+```
+
+### Option C — Local Development
+
+```bash
+pip install -r requirements.txt
+cd src
+uvicorn main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+---
+
+## ⌨️ Keyboard Shortcuts
+
+| Key | Action |
+|---|---|
+| `G` | Global View — cinematic orbit of the entire city |
+| `M` | Global Tactical Map overlay |
+| `V` | Cinema Mode — hide all UI for clean recording |
+| `Esc` | Deselect / close panels |
+| `⌘K` / `Ctrl+K` | Omni Search — find any node instantly |
+| `Click` node | Focus + lineage highlight |
+| `Double-click` node | Full upstream/downstream blast radius |
+
+---
+
+<!-- SCREENSHOT 4A: Terminal showing "dbt run" output with manifest.json and run_results.json being written. -->
+<div align="center">
+<img src="images/dagcity_live_sync_terminal.png" width="860" alt="Live Sync — Initialization" style="border-radius:10px;"/>
+</div>
+
+<!-- SCREENSHOT 4B: DagCity browser showing the city with the LIVE SYNC indicator active in the HUD (top-right badge reads "LIVE SYNC ACTIVE"). -->
+<div align="center">
+<img src="images/dagcity_live_sync_browser.png" width="860" alt="Live Sync — City initial view with LIVE SYNC ACTIVE badge" style="border-radius:10px;"/>
+</div>
+
+<div align="center">
+<img src="images/dagcity_live_sync_browser_2.png" width="860" alt="Live Sync — City after update with LIVE SYNC ACTIVE badge" style="border-radius:10px;"/>
+</div>
+
+<!-- SCREENSHOT 4C: Close-up of the sync status badge showing "LIVE SYNC ACTIVE" and the city rebuilding in real-time. -->
+<div align="center">
+<img src="images/dagcity_live_sync_badge.png" width="860" alt="Live Sync — LIVE SYNC ACTIVE badge detail" style="border-radius:10px;"/>
+</div>
+
+---
+
+## 🤖 AI Copilot
+
+The embedded AI panel connects to **OpenAI (gpt-4o-mini)** or **Groq (llama-3.3-70b-versatile)** with a DAG-aware context prompt that includes:
+
+- Nodes currently violating SLA thresholds (with execution times)
+- Dead-end nodes (staging/intermediate with no consumers — Ghost Protocol audit)
+- Heavy nodes by active Data Swell metric
+- Island count and total model count
+- Currently selected node
+
+The assistant responds with a structured JSON payload:
+
+```json
+{
+  "message": "The model fct_orders is your primary bottleneck at 187s, 1.56× your SLA.",
+  "action": "FOCUS_NODE",
+  "target": "fct_orders"
+}
+```
+
+When `action: FOCUS_NODE`, the UI automatically flies the camera to the target node and activates its lineage highlight — turning the AI into a **navigational co-pilot**.
+
+API keys are stored in `localStorage` only. No server-side key handling.
+
+<!-- SCREENSHOT 5: AI Copilot — showing the AI chat panel open on the right with a conversation about a bottleneck node, and the JSON response with FOCUS_NODE action. The DAG context should be visible in the prompt preview. -->
+<div align="center">
+<img src="images/dagcity_ai_copilot.png" width="860" alt="AI Copilot — Chat panel with DAG context and FOCUS_NODE action" style="border-radius:10px;"/>
+</div>
+
+---
+
+## 🧬 Parser Engine — 5-Phase DAG Extraction
+
+`ManifestParser` processes `manifest.json` + optional `run_results.json` in five sequential phases:
+
+| Phase | Operation |
+|---|---|
+| **1. Extraction** | Parse all `nodes` + `sources`, apply layer classification rules engine |
+| **2. Link Building** | Traverse `depends_on.nodes` to build directed edges, populate upstream/downstream arrays |
+| **3. Bottleneck Flagging** | Statistical outlier detection: `mean + 1.5σ` threshold |
+| **4. Topological Catch-All** | Reclassify `unclassified` nodes by graph topology (leaf = mart, interior = intermediate) |
+| **5. Group Reassignment** | Promote topology-resolved mart nodes to `"MARTS"` island after phase 4 |
+
+Layer color palette (server-assigned, browser-consistent):
+
+```python
+"source":       "#00ff66"   # Green  — raw data
+"staging":      "#ff0077"   # Pink   — stg_ models
+"intermediate": "#9d4edd"   # Purple — int_ models
+"mart":         "#00f2ff"   # Cyan   — fct_ / dim_
+"consumption":  "#ffd700"   # Gold   — exposures / metrics
+```
 
 ---
 
@@ -146,32 +406,46 @@ Key rendering systems:
 
 | Variable | Default | Description |
 |---|---|---|
-| `HOST_PROJECT_PATH` | `./data` | Absolute path to dbt project root on the host |
-| `MANIFEST_SUBPATH` | `target/manifest.json` | Relative path from project root to manifest |
-| `PORT` | `8080` | Port exposed by the HTTP server |
+| `HOST_PROJECT_PATH` | `./data` | Host path mounted to `/data` in container |
+| `MANIFEST_SUBPATH` | `target/manifest.json` | Relative path within the mounted volume |
+| `PORT` | `8080` | Server port |
+| `PROJECTS_DIR` | `/app/projects` | Internal project persistence directory |
 
 ---
 
-## 🧪 Running Tests
+## 🧱 Tech Stack
 
-```bash
-# From the repo root (outside Docker)
-pip install pytest
-pytest tests/ -v
-```
-
----
-
-## 🗺️ Roadmap
-
-- [ ] **Server-side upload endpoint** — `/api/upload` to receive `manifest.json` via HTTP POST and hot-reload the city without a container restart
-- [ ] **WebSocket live reload** — push graph updates to open browser tabs when `manifest.json` changes on disk
-- [ ] **Multi-project support** — load and compare multiple dbt projects side by side
-- [ ] **Export PNG/SVG** — snapshot the current city view
-- [ ] **Cost attribution** — annotate nodes with BigQuery/Snowflake execution cost data
+| Layer | Technology |
+|---|---|
+| **3D Engine** | Three.js r134 — WebGL renderer, bloom post-processing, CSS2DRenderer |
+| **Backend** | FastAPI + Uvicorn — async REST + SSE streaming |
+| **File Watching** | watchdog 4.0 — PollingObserver with asyncio bridge |
+| **Containerization** | Docker (python:3.12-slim) + Compose v2 |
+| **State Management** | Vanilla JS reactive singleton — project-scoped localStorage |
+| **AI Integration** | OpenAI / Groq REST API — structured JSON response format |
 
 ---
 
-## 📜 License
+## 📋 Roadmap
 
-MIT © [Ismaelardoy](https://github.com/Ismaelardoy)
+- [ ] dbt Cloud API integration (no local manifest required)
+- [ ] Time-travel mode — replay historical `run_results.json` as city animation
+- [ ] Slack / Mattermost alert routing for SLA breach events
+- [ ] Prometheus metrics export endpoint
+- [ ] WebGL2 instanced rendering for 10,000+ node DAGs
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE)
+
+---
+
+<div align="center">
+
+Built for data engineers who refuse to navigate complexity in two dimensions.
+
+**🏙️ DAG CITY — Where infrastructure meets art.**
+
+</div>

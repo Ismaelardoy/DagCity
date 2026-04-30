@@ -142,7 +142,7 @@ body.right-sidebar-open #city-radar-hud {
   right: 468px !important;
 }
 body.right-sidebar-open #city-radar-legend {
-  right: 468px !important;
+  right: 708px !important;
 }
 
 /* ── Cinema Mode - Master Class Solution ── */
@@ -468,8 +468,30 @@ input[type=range].sla-input::-webkit-slider-thumb {
   background: rgba(255,60,0,0.08); border: 1px solid rgba(255,60,0,0.25);
   border-radius: 10px; padding: 16px 20px; margin-top: 20px;
 }
+.sla-fire-count.clickable { cursor: pointer; transition: all 0.15s; }
+.sla-fire-count.clickable:hover { background: rgba(255,80,20,0.14); border-color: rgba(255,90,20,0.5); box-shadow: 0 0 14px rgba(255,90,20,0.25); }
 .sla-fire-count .fire-num { font-size: 42px; font-weight: 900; color: var(--orange); }
 .sla-fire-count .fire-label { font-size: 14px; color: #ff9966; letter-spacing: 3px; font-weight: bold; }
+#fire-node-list {
+  display: block;
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  margin-top: 10px;
+  overflow-y: auto;
+  border: 1px solid rgba(255,100,20,0.28);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.28);
+  padding: 6px 4px;
+  transition: max-height 0.22s ease, opacity 0.2s ease, transform 0.2s ease;
+}
+#fire-node-list.open {
+  max-height: 180px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
 
 /* Zone slider rows */
 .zone-row { margin-bottom: 22px; }
@@ -1742,7 +1764,6 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
   <div class="leg-row"><div class="leg-dot" style="background:#ff0077"></div>STAGING</div>
   <div class="leg-row"><div class="leg-dot" style="background:#9d4edd"></div>INTERMEDIATE</div>
   <div class="leg-row"><div class="leg-dot" style="background:#00f2ff"></div>MARTS</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#ffd700"></div>CONSUMPTION / BI</div>
   <div class="leg-row" style="margin-top:4px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
     <div class="leg-dot" style="background:#ff2222;box-shadow:0 0 8px #ff2222;opacity:0.4"></div>GHOST (DEAD END)
   </div>
@@ -1784,10 +1805,11 @@ HOST_PROJECT_PATH="/absolute/path/to/your/dbt-project"</div>
         <div class="sla-slider-fill" id="sla-global-fill" style="width:12%"></div>
         <input type="range" class="sla-input" id="sla-global-input" min="0" max="1000" step="0.1" value="120.0">
       </div>
-      <div class="sla-fire-count">
+      <div class="sla-fire-count clickable" id="sla-fire-toggle">
         <div class="fire-num" id="sla-fire-count">0</div>
         <div class="fire-label">NODES<br>ON FIRE</div>
       </div>
+      <div id="fire-node-list"></div>
     </div>
     <div class="sla-section">
       <div class="sla-label">Thermal VFX Sensitivity</div>

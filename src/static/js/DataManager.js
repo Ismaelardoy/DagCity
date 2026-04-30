@@ -180,6 +180,64 @@ export async function autoRestoreProject() {
 
 // ── Live Sync (SSE) ────────────────────────────────────
 let _evtSource = null;
+let _currentSyncSource = 'offline';
+
+window.addEventListener('dagcity:sync-source', (ev) => {
+  const src = String(ev?.detail?.source || '').toLowerCase();
+  if (src) _currentSyncSource = src;
+});
+
+function _scheduleSSEReconnect(delayMs = 5000) {
+  if (_evtSource) {
+    try { _evtSource.close(); } catch (_) {}
+    _evtSource = null;
+  }
+  setTimeout(initLiveSync, delayMs);
+}
+
+function _fetchProjectUpdate(projectName) {
+  const isLiveProject = projectName === 'live';
+  const url = isLiveProject
+    ? '/api/launch-local'
+    : `/api/projects/${encodeURIComponent(projectName)}`;
+  const method = isLiveProject ? 'POST' : 'GET';
+  return fetch(url, {
+    method,
+    cache: 'no-store',
+    headers: { 'Cache-Control': 'no-cache' }
+  }).then(async (res) => {
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const errJson = await res.json();
+        detail = errJson?.detail || errJson?.error || JSON.stringify(errJson);
+      } catch (_) {}
+      throw new Error(`HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+    }
+    return res.json();
+  });
+}
+
+function _applyLiveUpdateWithRetry(projectName, maxAttempts = 3) {
+  let attempt = 0;
+  const run = () => {
+    attempt += 1;
+    return _fetchProjectUpdate(projectName)
+      .then(data => {
+        console.log('[📡] Applying real-time update to 3D scene...');
+        rebuildCity(data, true);
+      })
+      .catch(err => {
+        if (attempt < maxAttempts) {
+          const retryDelay = 700 + (attempt * 350);
+          console.warn(`[📡] Live update attempt ${attempt} failed (${err.message}). Retrying in ${retryDelay}ms...`);
+          return new Promise(resolve => setTimeout(resolve, retryDelay)).then(run);
+        }
+        console.error('[📡] Live update fetch failed:', err);
+      });
+  };
+  return run();
+}
 
 function isLiveSessionActive() {
   try {
@@ -194,7 +252,15 @@ function isLiveSessionActive() {
 }
 
 export async function initLiveSync() {
-  if (_evtSource) return; // Already connected
+  // Always close existing connection to ensure clean state
+  if (_evtSource) {
+    try {
+      _evtSource.close();
+      console.log('[📡] Closing existing SSE connection before reconnect');
+    } catch (_) {}
+    _evtSource = null;
+  }
+  _currentSyncSource = 'offline';
 
   try {
     const res = await fetch('/api/status');
@@ -209,28 +275,24 @@ export async function initLiveSync() {
   _evtSource.onmessage = event => {
     try {
       const msg = JSON.parse(event.data);
+      console.log('[📡] SSE message received:', msg);
       if (msg.type === 'update') {
         const active = localStorage.getItem('dagcity_active_project');
         const liveSession = isLiveSessionActive();
+        const liveLikeSource = _currentSyncSource === 'live_sync' || _currentSyncSource === 'local_sync';
+        console.log('[📡] resolve →', { active, liveSession, liveLikeSource, syncSource: _currentSyncSource, msgProject: msg.project });
         // For explicit project updates: allow only active project updates.
-        // For special "live" updates: allow only while a live session is active.
+        // For special "live" updates: also allow when current loaded project
+        // source is live/local sync (covers reloads from Project Manager).
         const shouldApply =
           (msg.project === active) ||
-          (msg.project === 'live' && liveSession);
+          (msg.project === 'live' && (liveSession || liveLikeSource));
 
         if (shouldApply) {
-          console.log(`[📡] Live update detected: ${msg.project}`);
-          
-          // If it's the live project, we use launch-local to re-sync
-          const url = (msg.project === 'live') ? '/api/launch-local' : `/api/projects/${encodeURIComponent(msg.project)}`;
-          
-          fetch(url, { method: (msg.project === 'live' ? 'POST' : 'GET') })
-            .then(res => res.json())
-            .then(data => {
-              console.log('[📡] Applying real-time update to 3D scene...');
-              rebuildCity(data, true);
-            })
-            .catch(err => console.error('[📡] Live update fetch failed:', err));
+          console.log(`[📡] Live update detected: ${msg.project} → fetching update`);
+          _applyLiveUpdateWithRetry(msg.project, msg.project === 'live' ? 4 : 2);
+        } else {
+          console.warn('[📡] Live update IGNORED', { active, liveSession, msgProject: msg.project });
         }
       } else {
         // Generic SSE payloads should not hijack non-live sessions.
@@ -242,8 +304,19 @@ export async function initLiveSync() {
   };
   _evtSource.onerror = () => {
     console.warn('[📡] Live Sync connection lost. Retrying in 5s...');
-    _evtSource.close(); _evtSource = null; setTimeout(initLiveSync, 5000);
+    _scheduleSSEReconnect(5000);
   };
+}
+
+export function closeSSEConnection() {
+  if (_evtSource) {
+    try {
+      _evtSource.close();
+      console.log('[📡] SSE connection closed');
+    } catch (_) {}
+    _evtSource = null;
+  }
+  _currentSyncSource = 'offline';
 }
 
 // ── One-Click Live Connect ─────────────────────────────
@@ -388,6 +461,7 @@ export async function initLivePipelineStatus() {
 // (create/delete/rename/load) without requiring a page reload.
 window.addEventListener('focus', () => {
   refreshLivePipelineStatusDebounced();
+  if (!_evtSource || _evtSource.readyState === 2) initLiveSync();
 });
 
 window.addEventListener('storage', () => {

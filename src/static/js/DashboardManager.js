@@ -2,6 +2,9 @@
 // Handles project management, dropzone, and UI transitions between dashboard and 3D view
 
 import { storageManager } from './StorageManager.js';
+import { State } from './State.js';
+import { closeSSEConnection, initLivePipelineStatus } from './DataManager.js';
+import { startAnimationLoop } from './CityEngine.js';
 
 class DashboardManager {
   constructor() {
@@ -10,6 +13,23 @@ class DashboardManager {
     this.currentProject = null;
     this.is3DViewActive = false;
     this.cityEngine = null;
+  }
+
+  _syncActiveProjectSession(projectName, projectData) {
+    const source = String(projectData?.metadata?.source || projectData?.source || 'offline').toLowerCase();
+    const isLiveSource = source === 'live_sync' || source === 'local_sync';
+    localStorage.setItem('dagcity_active_project', projectName);
+    if (isLiveSource) {
+      localStorage.setItem('dagcity_is_live', 'true');
+      localStorage.setItem('dagcity_live_sync_session', JSON.stringify({
+        mode: 'live_sync',
+        project: projectName,
+        connectedAt: Date.now(),
+      }));
+    } else {
+      localStorage.removeItem('dagcity_is_live');
+      localStorage.removeItem('dagcity_live_sync_session');
+    }
   }
 
   async selectServerProject(projectName, cardElement) {
@@ -28,12 +48,25 @@ class DashboardManager {
       const res = await fetch('/api/projects/' + encodeURIComponent(projectName));
       if (!res.ok) throw new Error('Not found');
       const projectData = await res.json();
+      this._syncActiveProjectSession(projectName, projectData);
 
       this.currentProject = projectData;
       this.hideDashboard();
 
+      const sidebar = document.getElementById('sidebar');
+      const sbContent = document.getElementById('sb-content');
+      if (sidebar) sidebar.classList.remove('open');
+      if (sbContent) sbContent.innerHTML = '';
+      State.set('selectedNode', null);
+
       if (this.cityEngine && typeof this.cityEngine.rebuildCity === 'function') {
+        if (typeof this.cityEngine.disposeCity === 'function') {
+          this.cityEngine.disposeCity({ resetCamera: true });
+        }
         this.cityEngine.rebuildCity(projectData);
+        if (typeof this.cityEngine.startAnimationLoop === 'function') {
+          this.cityEngine.startAnimationLoop();
+        }
       } else {
         window.__PENDING_PROJECT_DATA__ = projectData;
       }
@@ -279,14 +312,27 @@ class DashboardManager {
 
       // Load project data from IndexedDB
       const projectData = await storageManager.loadProject(projectId);
+      this._syncActiveProjectSession(projectId, projectData);
       this.currentProject = projectData;
 
       // Hide dashboard UI with fade out
       this.hideDashboard();
 
+      const sidebar = document.getElementById('sidebar');
+      const sbContent = document.getElementById('sb-content');
+      if (sidebar) sidebar.classList.remove('open');
+      if (sbContent) sbContent.innerHTML = '';
+      State.set('selectedNode', null);
+
       // Initialize 3D engine with project data
       if (this.cityEngine && typeof this.cityEngine.rebuildCity === 'function') {
+        if (typeof this.cityEngine.disposeCity === 'function') {
+          this.cityEngine.disposeCity({ resetCamera: true });
+        }
         this.cityEngine.rebuildCity(projectData);
+        if (typeof this.cityEngine.startAnimationLoop === 'function') {
+          this.cityEngine.startAnimationLoop();
+        }
       } else {
         // If cityEngine not ready, store data for later initialization
         window.__PENDING_PROJECT_DATA__ = projectData;
@@ -393,7 +439,19 @@ class DashboardManager {
 
     try {
       await storageManager.deleteProject(projectId);
+      
+      // Clean up live sync state if this was the active project or a live project
+      const activeProject = localStorage.getItem('dagcity_active_project');
+      if (activeProject === projectId) {
+        localStorage.removeItem('dagcity_active_project');
+        localStorage.removeItem('dagcity_is_live');
+        localStorage.removeItem('dagcity_live_sync_session');
+        closeSSEConnection();
+        startAnimationLoop();
+      }
+      
       this.renderProjectList();
+      initLivePipelineStatus();
       console.log('[DashboardManager] Project deleted:', projectId);
     } catch (error) {
       console.error('[DashboardManager] Error deleting project:', error);
@@ -406,7 +464,19 @@ class DashboardManager {
 
     try {
       await fetch('/api/projects/' + encodeURIComponent(projectName), { method: 'DELETE' });
+      
+      // Clean up live sync state if this was the active project or a live project
+      const activeProject = localStorage.getItem('dagcity_active_project');
+      if (activeProject === projectName) {
+        localStorage.removeItem('dagcity_active_project');
+        localStorage.removeItem('dagcity_is_live');
+        localStorage.removeItem('dagcity_live_sync_session');
+        closeSSEConnection();
+        startAnimationLoop();
+      }
+      
       await this.renderProjectList();
+      initLivePipelineStatus();
       console.log('[DashboardManager] Server project deleted:', projectName);
     } catch (error) {
       console.error('[DashboardManager] Error deleting server project:', error);

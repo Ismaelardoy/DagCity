@@ -5,7 +5,7 @@ import { State } from './State.js';
 import {
   meshes, nodeMeshMap, edgeObjs, nodeMap,
   applySelection, applyBlastRadius, resetSelection, tweenCamera, updateFires, rebuildCity, disposeCity, flyToNode, flyToNodeNoSelect,
-  makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics, getRaycastTargets, zoomToFitAll, GLOBAL_VIEW_FLIGHT_MS, flyToIsland, isGlobalViewMode
+  makeTimeSprite, getNodeSLA, buildBuilding, buildEdge, updateSyncMetrics, getRaycastTargets, zoomToFitAll, GLOBAL_VIEW_FLIGHT_MS, flyToIsland, isGlobalViewMode, startAnimationLoop
 } from './CityEngine.js';
 import { controls, camera, composer } from './Visualizer.js';
 import { aiClient } from './AIClient.js';
@@ -26,6 +26,155 @@ export { isCinemaMode };
 function syncRightSidebarUIState() {
   const open = !!(sidebar && sidebar.classList.contains('open'));
   document.body.classList.toggle('right-sidebar-open', open);
+}
+
+const fireListState = {
+  expanded: false,
+  isolatedNodeId: null,
+  prevMeshVisibility: new Map(),
+  prevEdgeVisibility: new Map(),
+};
+
+function getNodesOnFire() {
+  return meshes
+    .map(m => m?.userData?.node)
+    .filter(n => n && n.is_bottleneck)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+function clearFireNodeIsolation() {
+  if (fireListState.prevMeshVisibility.size) {
+    meshes.forEach(m => {
+      if (fireListState.prevMeshVisibility.has(m)) {
+        m.visible = fireListState.prevMeshVisibility.get(m);
+      }
+    });
+  }
+  if (fireListState.prevEdgeVisibility.size) {
+    edgeObjs.forEach(e => {
+      if (e?.line && fireListState.prevEdgeVisibility.has(e.line)) {
+        e.line.visible = fireListState.prevEdgeVisibility.get(e.line);
+      }
+      if (Array.isArray(e?.particles)) {
+        e.particles.forEach(p => {
+          if (fireListState.prevEdgeVisibility.has(p)) {
+            p.visible = fireListState.prevEdgeVisibility.get(p);
+          }
+        });
+      }
+      if (Array.isArray(e?.arrows)) {
+        e.arrows.forEach(a => {
+          if (a?.line && fireListState.prevEdgeVisibility.has(a.line)) {
+            a.line.visible = fireListState.prevEdgeVisibility.get(a.line);
+          }
+          if (a?.cone && fireListState.prevEdgeVisibility.has(a.cone)) {
+            a.cone.visible = fireListState.prevEdgeVisibility.get(a.cone);
+          }
+        });
+      }
+    });
+  }
+  fireListState.prevMeshVisibility.clear();
+  fireListState.prevEdgeVisibility.clear();
+  fireListState.isolatedNodeId = null;
+}
+
+function isolateFireNode(nodeId) {
+  if (!nodeId) return;
+  clearFireNodeIsolation();
+
+  meshes.forEach(m => {
+    fireListState.prevMeshVisibility.set(m, m.visible);
+    const thisId = m?.userData?.node?.id;
+    m.visible = thisId === nodeId;
+  });
+
+  edgeObjs.forEach(e => {
+    if (e?.line) {
+      fireListState.prevEdgeVisibility.set(e.line, e.line.visible);
+      e.line.visible = false;
+    }
+    if (Array.isArray(e?.particles)) {
+      e.particles.forEach(p => {
+        fireListState.prevEdgeVisibility.set(p, p.visible);
+        p.visible = false;
+      });
+    }
+    if (Array.isArray(e?.arrows)) {
+      e.arrows.forEach(a => {
+        if (a?.line) {
+          fireListState.prevEdgeVisibility.set(a.line, a.line.visible);
+          a.line.visible = false;
+        }
+        if (a?.cone) {
+          fireListState.prevEdgeVisibility.set(a.cone, a.cone.visible);
+          a.cone.visible = false;
+        }
+      });
+    }
+  });
+
+  fireListState.isolatedNodeId = nodeId;
+}
+
+function renderFireNodeList() {
+  const list = document.getElementById('fire-node-list');
+  if (!list) return;
+  if (!fireListState.expanded) {
+    list.classList.remove('open');
+    clearFireNodeIsolation();
+    return;
+  }
+
+  const items = getNodesOnFire();
+  list.innerHTML = items.length
+    ? items.map((node, index) => (
+      `<div class="fire-node-item" data-node-id="${node.id}" style="padding:8px 12px;font-size:13px;color:#ffd8c8;cursor:pointer;border-radius:6px;letter-spacing:0.3px;display:flex;align-items:center;gap:8px;transition:all 0.15s;">
+        <span style="color:#ff5500;font-weight:bold;font-size:12px;min-width:18px;">${index + 1}.</span>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${node.name || node.id}</span>
+      </div>`
+    )).join('')
+    : '<div style="padding:8px;color:#888;font-size:11px;">No nodes on fire.</div>';
+  list.classList.add('open');
+
+  list.querySelectorAll('.fire-node-item').forEach(el => {
+    el.addEventListener('mouseenter', () => {
+      el.style.background = 'rgba(255,100,20,0.18)';
+      el.style.color = '#fff';
+      el.style.boxShadow = '0 0 10px rgba(255,100,20,0.35)';
+      isolateFireNode(el.getAttribute('data-node-id'));
+    });
+    el.addEventListener('mouseleave', () => {
+      el.style.background = 'transparent';
+      el.style.color = '#ffd8c8';
+      el.style.boxShadow = 'none';
+      clearFireNodeIsolation();
+    });
+    el.addEventListener('click', () => {
+      const id = el.getAttribute('data-node-id');
+      clearFireNodeIsolation();
+      flyToNodeNoSelect(id, 520);
+    });
+  });
+}
+
+function bindFireNodeListToggle() {
+  const toggle = document.getElementById('sla-fire-toggle');
+  if (!toggle || toggle.dataset.bound === '1') return;
+  toggle.dataset.bound = '1';
+  toggle.addEventListener('click', () => {
+    fireListState.expanded = !fireListState.expanded;
+    renderFireNodeList();
+  });
+
+  const fireCountEl = document.getElementById('sla-fire-count');
+  if (fireCountEl && !fireCountEl.dataset.bound) {
+    fireCountEl.dataset.bound = '1';
+    const obs = new MutationObserver(() => {
+      if (fireListState.expanded) renderFireNodeList();
+    });
+    obs.observe(fireCountEl, { childList: true, characterData: true, subtree: true });
+  }
 }
 
 // ── Cinema Mode Toggle ──────────────────────────────────
@@ -855,6 +1004,9 @@ export function initSettings() {
     });
   }
 
+  bindFireNodeListToggle();
+  renderFireNodeList();
+
   syncFlySpeedControls();
 }
 
@@ -1539,6 +1691,7 @@ function renderProjects(projects) {
     
     const row = document.createElement('div');
     row.className = `pm-project-row ${isActive ? 'active' : ''}`;
+    row.dataset.projectName = p.name;
     if (isDisabled) row.style.opacity = '0.5';
     
     row.innerHTML = `
@@ -1559,7 +1712,7 @@ function renderProjects(projects) {
         </div>
       </div>
       <div class="pm-project-actions">
-        <button class="pm-btn pm-btn-load" onclick="window._loadProject('${p.name}')" ${isDisabled ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ''}>${isDisabled ? 'INACTIVE' : 'LOAD'}</button>
+        <button class="pm-btn pm-btn-load" data-project-name="${p.name}" onclick="window._loadProject('${p.name}')" ${isDisabled ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ''}>${isDisabled ? 'INACTIVE' : 'LOAD'}</button>
         <button class="pm-btn pm-btn-rename" style="opacity:0.4;" onclick="window._startRename('${p.name}')">RENAME</button>
         <button class="pm-btn pm-btn-delete" onclick="window._deleteProject('${p.name}')">DELETE</button>
       </div>`;
@@ -1567,8 +1720,17 @@ function renderProjects(projects) {
   });
 }
 
+function markActiveProjectRow(name) {
+  const rows = pmList ? pmList.querySelectorAll('.pm-project-row') : [];
+  rows.forEach(r => r.classList.remove('active'));
+  const activeRow = pmList ? Array.from(rows).find(r => r.dataset.projectName === name) : null;
+  if (activeRow) activeRow.classList.add('active');
+}
+
 async function loadProject(name) {
-  const btn = pmList.querySelector(`[onclick="window._loadProject('${name}')"]`);
+  const btn = pmList
+    ? Array.from(pmList.querySelectorAll('.pm-btn-load')).find(b => b.dataset.projectName === name)
+    : null;
   if (btn) { btn.textContent = 'LOADING...'; btn.disabled = true; }
   try {
     const res = await fetch('/api/projects/' + encodeURIComponent(name));
@@ -1586,6 +1748,22 @@ async function loadProject(name) {
     const source = data?.metadata?.source || 'offline';
     const isLiveSource = source === 'live_sync' || source === 'local_sync';
 
+    projectModal.classList.remove('open');
+    const overlay = document.getElementById('awaiting-overlay');
+    if (overlay.style.display !== 'none') await window._dzHideOverlay();
+
+    // Reset selected/sidebar state before rebuilding to avoid stale project-island UI overlap.
+    State.set('selectedNode', null);
+    resetSelection();
+    if (sidebar) sidebar.classList.remove('open');
+    if (sbContent) sbContent.innerHTML = '';
+    syncRightSidebarUIState();
+
+    // Defensive cleanup to avoid stale painted/island state across project switches.
+    disposeCity({ resetCamera: true });
+    rebuildCity(data, false);
+    startAnimationLoop();
+
     localStorage.setItem('dagcity_active_project', name);
     if (isLiveSource) {
       localStorage.setItem('dagcity_is_live', 'true');
@@ -1598,14 +1776,7 @@ async function loadProject(name) {
       localStorage.removeItem('dagcity_is_live');
       localStorage.removeItem('dagcity_live_sync_session');
     }
-
-    projectModal.classList.remove('open');
-    const overlay = document.getElementById('awaiting-overlay');
-    if (overlay.style.display !== 'none') await window._dzHideOverlay();
-
-    // Defensive cleanup to avoid stale painted/island state across project switches.
-    disposeCity({ resetCamera: true });
-    rebuildCity(data, false);
+    markActiveProjectRow(name);
     
     // Update HUD Sync Status
     updateSyncHUD(source);
@@ -2001,6 +2172,7 @@ export function rebuildCityWithUI(graphData, isLiveSync = false) {
   renderZoneSliders();
   renderNodeOverrides();
   updateFires();
+  renderFireNodeList();
 }
 
 // Listen for city rebuild events to refresh SLA sliders
@@ -2009,4 +2181,5 @@ State.on('city:rebuilt', graphData => {
   renderZoneSliders();
   renderNodeOverrides();
   updateFires();
+  renderFireNodeList();
 });

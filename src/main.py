@@ -320,7 +320,7 @@ async def startup_event():
     # 3. Initialize Live Sync (Volume Watcher)
     if is_live_sync_available():
         watch_root = os.path.dirname(config.EXTERNAL_MANIFEST_PATH)
-        watch_recursive = False
+        watch_recursive = False  # manifest.json and run_results.json are in the same directory
     else:
         watch_root = PROJECTS_DIR
         watch_recursive = True

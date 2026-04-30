@@ -17,40 +17,59 @@ class ManifestEventHandler(FileSystemEventHandler):
         self.last_triggered = 0
         self.debounce_seconds = 0.5
 
+    def _process_manifest_event_path(self, event_path: str):
+        if not event_path or not event_path.endswith("manifest.json"):
+            return
+
+        now = time.time()
+        if now - self.last_triggered <= self.debounce_seconds:
+            return
+        self.last_triggered = now
+
+        # Check if it's the external manifest (Live Sync)
+        is_external = False
+        try:
+            if os.path.exists(self.manifest_path) and os.path.samefile(event_path, self.manifest_path):
+                is_external = True
+        except:
+            pass
+
+        if is_external or event_path == self.manifest_path:
+            project_name = "live"
+        else:
+            # Extract project name from path (assumes /data/projects/{name}/manifest.json)
+            parts = event_path.split(os.sep)
+            project_name = None
+            try:
+                # Look for the part after 'projects'
+                idx = parts.index("projects")
+                if idx + 1 < len(parts):
+                    project_name = parts[idx + 1]
+            except ValueError:
+                # Fallback: if it's just /data/manifest.json or similar
+                project_name = "live"
+
+        print(f"[WATCHER] Change detected in {event_path} (Project: {project_name})")
+        self.on_change_callback(project_name)
+
     def on_modified(self, event):
         if event.is_directory:
             return
-        
-        event_path = os.path.abspath(event.src_path)
-        if event_path.endswith("manifest.json"):
-            now = time.time()
-            if now - self.last_triggered > self.debounce_seconds:
-                self.last_triggered = now
-                
-                # Check if it's the external manifest (Live Sync)
-                is_external = False
-                try:
-                    if os.path.exists(self.manifest_path) and os.path.samefile(event_path, self.manifest_path):
-                        is_external = True
-                except: pass
-                
-                if is_external or event_path == self.manifest_path:
-                    project_name = "live"
-                else:
-                    # Extract project name from path (assumes /data/projects/{name}/manifest.json)
-                    parts = event_path.split(os.sep)
-                    project_name = None
-                    try:
-                        # Look for the part after 'projects'
-                        idx = parts.index("projects")
-                        if idx + 1 < len(parts):
-                            project_name = parts[idx+1]
-                    except ValueError:
-                        # Fallback: if it's just /data/manifest.json or similar
-                        project_name = "live"
 
-                print(f"[WATCHER] Change detected in {event_path} (Project: {project_name})")
-                self.on_change_callback(project_name)
+        event_path = os.path.abspath(event.src_path)
+        self._process_manifest_event_path(event_path)
+
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        event_path = os.path.abspath(event.src_path)
+        self._process_manifest_event_path(event_path)
+
+    def on_moved(self, event):
+        if event.is_directory:
+            return
+        event_path = os.path.abspath(getattr(event, "dest_path", None) or event.src_path)
+        self._process_manifest_event_path(event_path)
 
 class ManifestWatcher:
     """

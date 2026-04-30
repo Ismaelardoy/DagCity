@@ -1158,7 +1158,7 @@ const DRS = {
 
 
 // ── Constants ──────────────────────────────────────────
-export const LAYER_X = { source: -300, staging: -100, intermediate: 100, mart: 300, consumption: 500, default: 650 };
+export const LAYER_X = { source: -300, staging: -100, intermediate: 100, mart: 300, default: 650 };
 
 // ─────────────────────────────────────────────────────────
 // LAYOUT CONFIG — Tune the city footprint by editing these.
@@ -1264,11 +1264,11 @@ function getSwellScaleForNode(n, ud, intensityOverride = null) {
   const blendedWeight = (weight * 0.3) + (finalWeight * 0.7);
 
   const metricProfile = {
-    rows: { gamma: 0.92, widthGain: 4.8, heightGain: 0.95, widthCap: 7.6, overflowHeightGain: 4.2 },
-    execution_time: { gamma: 1.00, widthGain: 3.8, heightGain: 0.72, widthCap: 6.8, overflowHeightGain: 3.6 },
-    code_length: { gamma: 0.96, widthGain: 4.3, heightGain: 0.82, widthCap: 7.2, overflowHeightGain: 3.9 },
-    connections: { gamma: 0.94, widthGain: 4.5, heightGain: 0.86, widthCap: 7.4, overflowHeightGain: 4.0 },
-  }[metric] || { gamma: 0.95, widthGain: 4.2, heightGain: 0.82, widthCap: 7.0, overflowHeightGain: 3.8 };
+    rows: { gamma: 0.92, widthGain: 3.5, heightGain: 0.72, widthCap: 6.0, overflowHeightGain: 3.0 },
+    execution_time: { gamma: 1.00, widthGain: 2.9, heightGain: 0.60, widthCap: 5.4, overflowHeightGain: 2.5 },
+    code_length: { gamma: 0.96, widthGain: 3.2, heightGain: 0.66, widthCap: 5.8, overflowHeightGain: 2.7 },
+    connections: { gamma: 0.94, widthGain: 3.3, heightGain: 0.68, widthCap: 5.9, overflowHeightGain: 2.8 },
+  }[metric] || { gamma: 0.95, widthGain: 3.1, heightGain: 0.64, widthCap: 5.6, overflowHeightGain: 2.6 };
 
   const profiledWeight = Math.pow(Math.max(0, blendedWeight), metricProfile.gamma);
   const contrastWeight = Math.pow(profiledWeight, 1.18);
@@ -1341,6 +1341,10 @@ function refreshEdgeGeometryFromNodes() {
 
 function applyDynamicSwellLayout() {
   const enabled = !!State.dataVolumeMode;
+  const { nodeSpacingX, nodeSpacingZ, maxPerRow } = LAYOUT_CONFIG;
+  const swellMaxPerRow = Math.max(1, Math.floor(maxPerRow / 2));
+  const swellNodeSpacingX = nodeSpacingX * 1.4;
+  const swellNodeSpacingZ = nodeSpacingZ * 1.4;
 
   const buckets = {};
   for (let i = 0; i < meshes.length; i++) {
@@ -1372,44 +1376,117 @@ function applyDynamicSwellLayout() {
     return;
   }
 
+  // Data Volume mode: expand island-to-island spacing according to each
+  // island's effective swell radius so larger islands get more breathing room.
+  const islandStats = {};
+  for (let i = 0; i < meshes.length; i++) {
+    const n = meshes[i]?.userData?.node;
+    if (!n) continue;
+    const groupKey = n.group || 'default';
+    const bx = Number.isFinite(n._baseLayoutX) ? n._baseLayoutX : n.x;
+    const bz = Number.isFinite(n._baseLayoutZ) ? n._baseLayoutZ : n.z;
+    const w = getSwellScaleForNode(n, null, 1.0).widthScale;
+    if (!islandStats[groupKey]) {
+      islandStats[groupKey] = { sumX: 0, sumZ: 0, count: 0, maxWidth: 1.0 };
+    }
+    const st = islandStats[groupKey];
+    st.sumX += bx;
+    st.sumZ += bz;
+    st.count += 1;
+    if (w > st.maxWidth) st.maxWidth = w;
+  }
+
+  const islandKeys = Object.keys(islandStats);
+  let globalCenterX = 0;
+  let globalCenterZ = 0;
+  for (let i = 0; i < islandKeys.length; i++) {
+    const st = islandStats[islandKeys[i]];
+    if (!st.count) continue;
+    globalCenterX += st.sumX / st.count;
+    globalCenterZ += st.sumZ / st.count;
+  }
+  if (islandKeys.length > 0) {
+    globalCenterX /= islandKeys.length;
+    globalCenterZ /= islandKeys.length;
+  }
+
+  const islandOffset = {};
+  for (let i = 0; i < islandKeys.length; i++) {
+    const key = islandKeys[i];
+    const st = islandStats[key];
+    if (!st.count) {
+      islandOffset[key] = { x: 0, z: 0 };
+      continue;
+    }
+
+    const centerX = st.sumX / st.count;
+    const centerZ = st.sumZ / st.count;
+    let dx = centerX - globalCenterX;
+    let dz = centerZ - globalCenterZ;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-4) {
+      dx = 1;
+      dz = 0;
+    } else {
+      dx /= len;
+      dz /= len;
+    }
+
+    const swellRadius = Math.max(0, st.maxWidth - 1);
+    const push = swellRadius * 35;
+    islandOffset[key] = { x: dx * push, z: dz * push };
+  }
+
   let changed = false;
   const keys = Object.keys(buckets);
   for (let i = 0; i < keys.length; i++) {
     const arr = buckets[keys[i]];
     if (!arr.length) continue;
 
+    const ordered = [...arr].sort((a, b) => {
+      const ax = Number.isFinite(a._baseLayoutX) ? a._baseLayoutX : a.x;
+      const bx = Number.isFinite(b._baseLayoutX) ? b._baseLayoutX : b.x;
+      if (ax !== bx) return ax - bx;
+      const az = Number.isFinite(a._baseLayoutZ) ? a._baseLayoutZ : a.z;
+      const bz = Number.isFinite(b._baseLayoutZ) ? b._baseLayoutZ : b.z;
+      return az - bz;
+    });
+
     let cx = 0;
     let cz = 0;
-    let maxWidth = 1;
-    for (let j = 0; j < arr.length; j++) {
-      const n = arr[j];
+    for (let j = 0; j < ordered.length; j++) {
+      const n = ordered[j];
       const bx = Number.isFinite(n._baseLayoutX) ? n._baseLayoutX : n.x;
       const bz = Number.isFinite(n._baseLayoutZ) ? n._baseLayoutZ : n.z;
       cx += bx;
       cz += bz;
-      const w = getSwellScaleForNode(n, null, 1.0).widthScale;
-      if (w > maxWidth) maxWidth = w;
     }
-    cx /= arr.length;
-    cz /= arr.length;
+    cx /= ordered.length;
+    cz /= ordered.length;
 
-    const blockStretch = 1 + Math.max(0, maxWidth - 1) * 0.26;
+    const cols = Math.min(ordered.length, swellMaxPerRow);
+    const islandKey = ordered[0]?.group || 'default';
+    const islandPush = islandOffset[islandKey] || { x: 0, z: 0 };
 
-    for (let j = 0; j < arr.length; j++) {
-      const n = arr[j];
-      const bx = Number.isFinite(n._baseLayoutX) ? n._baseLayoutX : n.x;
-      const bz = Number.isFinite(n._baseLayoutZ) ? n._baseLayoutZ : n.z;
-      const dx = bx - cx;
-      const dz = bz - cz;
+    for (let j = 0; j < ordered.length; j++) {
+      const n = ordered[j];
+      const col = j % swellMaxPerRow;
+      const row = Math.floor(j / swellMaxPerRow);
+
+      const baseTx = cx + row * swellNodeSpacingX;
+      const baseTz = cz + (col - (cols - 1) / 2) * swellNodeSpacingZ;
+
+      const dx = baseTx - cx;
+      const dz = baseTz - cz;
 
       const ownW = getSwellScaleForNode(n, null, 1.0).widthScale;
-      const ownPush = Math.max(0, ownW - 1) * 8;
+      const ownPush = 0;
       const len = Math.hypot(dx, dz);
       const dirX = len > 1e-4 ? (dx / len) : 0;
       const dirZ = len > 1e-4 ? (dz / len) : 0;
 
-      const tx = cx + dx * blockStretch + dirX * ownPush;
-      const tz = cz + dz * blockStretch + dirZ * ownPush;
+      const tx = baseTx + dirX * ownPush + islandPush.x;
+      const tz = baseTz + dirZ * ownPush + islandPush.z;
 
       if (Math.abs(n.x - tx) > 0.01 || Math.abs(n.z - tz) > 0.01) {
         n.x += (tx - n.x) * 0.2;
@@ -1884,7 +1961,6 @@ function getLayerDiagramColor(layer) {
   if (l === 'staging') return '#39ff14';
   if (l === 'intermediate') return '#66c2ff';
   if (l === 'mart') return '#2f9bff';
-  if (l === 'consumption') return '#ffd166';
   return '#8fb3c8';
 }
 
@@ -4290,7 +4366,7 @@ export function rebuildCity(graphData, isLiveSync = false) {
   // ── Sequential Grid-Wrap Layout ───────────────────────
   // All numeric values come from LAYOUT_CONFIG (top of file). Edit there.
   const { nodeSpacingX, nodeSpacingZ, maxPerRow, groupSpacing } = LAYOUT_CONFIG;
-  const LAYER_ORDER = ['source', 'staging', 'intermediate', 'mart', 'consumption', 'default'];
+  const LAYER_ORDER = ['source', 'staging', 'intermediate', 'mart', 'default'];
 
   projects.forEach(p => {
     const center = projectCenters[p];
@@ -4559,21 +4635,22 @@ export function disposeCity({ resetCamera = true } = {}) {
   });
   islandLabels.length = 0;
 
-  // Dispose island groups (which contain island labels)
-  Object.keys(islandGroups).forEach(k => {
-    const g = islandGroups[k];
-    if (g && g.parent) g.parent.remove(g);
-    delete islandGroups[k];
-    delete islandMeta[k];
-    delete islandCenters[k];
-  });
-
-  // Clear LOD saved references
+  // Clear LOD saved references and tactical rings BEFORE deleting islandMeta keys.
+  // Order matters: prior implementation iterated `islandMeta` after wiping it,
+  // which left tactical rings + LOD-detached labels/groups orphaned in the scene
+  // and caused old project islands to appear underneath the newly loaded one.
   Object.keys(islandMeta).forEach(k => {
     const meta = islandMeta[k];
     if (!meta) return;
+    if (meta._lodSavedLabel) {
+      const lbl = meta._lodSavedLabel;
+      if (lbl.parent) lbl.parent.remove(lbl);
+      if (lbl.material?.map) lbl.material.map.dispose();
+      if (lbl.material) lbl.material.dispose();
+      meta._lodSavedLabel = null;
+    }
     meta._lodSavedParent = null;
-    meta._lodSavedLabel = null;
+    meta._lodSavedParentIndex = -1;
     meta._lodFar = false;
     if (meta.tacticalRing) {
       if (meta.tacticalRing.parent) meta.tacticalRing.parent.remove(meta.tacticalRing);
@@ -4586,7 +4663,39 @@ export function disposeCity({ resetCamera = true } = {}) {
       cancelAnimationFrame(meta._ringFadeRaf);
       meta._ringFadeRaf = null;
     }
+    if (meta._ringLabelTimer) {
+      clearTimeout(meta._ringLabelTimer);
+      meta._ringLabelTimer = null;
+    }
   });
+
+  // Dispose island groups (which still contain any non-LOD-detached children)
+  Object.keys(islandGroups).forEach(k => {
+    const g = islandGroups[k];
+    if (g && g.parent) g.parent.remove(g);
+    delete islandGroups[k];
+    delete islandMeta[k];
+    delete islandCenters[k];
+  });
+
+  // Final sweep: scrub any leftover island/tactical objects directly from scene
+  // graph (defense in depth against LOD or animation paths re-adding them after
+  // dispose has already deleted the metadata).
+  if (scene && Array.isArray(scene.children)) {
+    const stale = scene.children.filter(obj => {
+      if (!obj) return false;
+      if (obj.name === 'tacticalRing') return true;
+      if (obj.name === 'islandLabel') return true;
+      if (typeof obj.name === 'string' && obj.name.startsWith('island_')) return true;
+      return false;
+    });
+    stale.forEach(obj => {
+      scene.remove(obj);
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material?.map) obj.material.map.dispose();
+      if (obj.material) obj.material.dispose();
+    });
+  }
 
   // Dispose meshes
   [...meshes].forEach(m => {
@@ -4939,14 +5048,14 @@ export function startAnimationLoop() {
         const inFocus = (!State.selectedNode || critSet.has(n.id));
         
         // LOD-based label rendering: only show when within reasonable distance
-        const labelLODThreshold = 1200; // Don't render labels beyond this distance
+        const labelLODThreshold = 1550; // Slightly higher render distance for name labels
         const shouldRenderLabel = labelsEnabled && inFocus && (distToLabel < labelLODThreshold || isSelected || ghostVisible);
         
         let targetOpacity = 0;
 
         if (shouldRenderLabel) {
           if (sY > 0.1 && m.visible) {
-            const tFade = Math.min(1, Math.max(0, (distToLabel - 550) / 300));
+            const tFade = Math.min(1, Math.max(0, (distToLabel - 700) / 420));
             targetOpacity = 1.0 - (tFade * tFade * (3 - 2 * tFade));
           }
         } else if (ghostVisible && sY > 0.1 && m.visible) {
@@ -5023,7 +5132,7 @@ export function startAnimationLoop() {
         const ghostVisible = !labelsEnabled && !!ud.isHovered;
         
         // OPTIMIZATION: Only show time labels when close or for bottlenecks
-        const timeLabelLODThreshold = 1000; // Stricter threshold for time labels
+        const timeLabelLODThreshold = 1300; // Increased render distance for time labels
         const shouldShow = labelsEnabled
           ? (State.perfMode && (isBottleneck || dist < timeLabelLODThreshold || isSelected))
           : (State.perfMode && ghostVisible);
@@ -5040,7 +5149,7 @@ export function startAnimationLoop() {
             const flash = (Math.sin(t * 10) + 1) / 2;
             targetOpacity = 0.7 + flash * 0.3;
           } else {
-            targetOpacity = ghostVisible ? 1.0 : Math.min(1.0, (600 - dist) / 150);
+            targetOpacity = ghostVisible ? 1.0 : Math.min(1.0, (780 - dist) / 220);
           }
           const currentOpacity = Number(timeLabel.material.opacity) || 0;
           timeLabel.material.opacity = currentOpacity + (targetOpacity - currentOpacity) * 0.2;
@@ -5087,7 +5196,7 @@ export function startAnimationLoop() {
         const ghostVisible = !labelsEnabled && !!ud.isHovered;
 
         // OPTIMIZATION: same threshold as timeLabel (1000) → identical FPS profile.
-        const volumeLabelLODThreshold = 1000;
+        const volumeLabelLODThreshold = 1300;
         const shouldShow = labelsEnabled
           ? (m.visible && sY > 0.1 && (dist < volumeLabelLODThreshold || isSelected))
           : (ghostVisible && m.visible && sY > 0.1);
@@ -5099,13 +5208,13 @@ export function startAnimationLoop() {
           const yOff = (State.perfMode ? 50 : 28);
           volumeLabel.position.y = ud.baseH + (yOff / safeSY);
           volumeLabel.position.x = 0;
-          const baseW = 36, baseHt = 14.4;
+          const baseW = 42, baseHt = 16.8;
           volumeLabel.scale.set(baseW / safeSX, baseHt / safeSY, 1);
 
           // Ease-in opacity (identical math to timeLabel, threshold 600/150).
           const targetOpacity = ghostVisible
             ? 1.0
-            : Math.min(1.0, (600 - dist) / 150);
+            : Math.min(1.0, (780 - dist) / 220);
           const currentOpacity = Number(volumeLabel.material.opacity) || 0;
           volumeLabel.material.opacity = currentOpacity + (targetOpacity - currentOpacity) * 0.2;
           volumeLabel.visible = volumeLabel.material.opacity > 0.03;

@@ -108,8 +108,10 @@ export function initScene() {
     
     document.addEventListener('keydown', (e) => {
       if (!controls) return;
+      const aiInput = document.getElementById('ai-chat-input');
+      if (aiInput && document.activeElement === aiInput) return;
       pressedKeys.add(e.code);
-      
+
       if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         e.preventDefault();
       }

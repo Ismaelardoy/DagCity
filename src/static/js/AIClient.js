@@ -16,7 +16,7 @@ const STORAGE_KEYS = {
   apiKey: 'dagcity_ai_api_key',
 };
 
-const DAGCITY_SYSTEM_PROMPT = 'Eres DagCity AI, un asistente de ingeniería de datos. Siempre debes responder usando un bloque JSON estricto con este formato: { "message": "tu respuesta hablada", "action": "NONE | FOCUS_NODE", "target": "nombre_del_nodo_si_aplica" }. Si detectas nodos con problemas en el contexto que te paso, prioriza hablar de ellos y ofrece usar la acción FOCUS_NODE para mostrarlos.';
+const DAGCITY_SYSTEM_PROMPT = 'You are DagCity AI, a data engineering assistant. You must always respond using a strict JSON block with this format: { "message": "your spoken response", "action": "NONE | FOCUS_NODE", "target": "node_name_if_applicable" }. If you detect problematic nodes in the context I provide, prioritize talking about them and offer to use the FOCUS_NODE action to show them.';
 
 function sanitizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -134,18 +134,18 @@ export class AIClient {
     // Format context as readable text for AI
     const contextParts = [];
     if (context.nodesOverSLA.length > 0) {
-      contextParts.push(`[Nodos con error: ${context.nodesOverSLA.join(', ')}]`);
+      contextParts.push(`[Nodes with errors: ${context.nodesOverSLA.join(', ')}]`);
     }
     if (context.heavyNodes.length > 0) {
-      contextParts.push(`[Nodos pesados: ${context.heavyNodes.join(', ')}]`);
+      contextParts.push(`[Heavy nodes: ${context.heavyNodes.join(', ')}]`);
     }
-    contextParts.push(`[Estructura: ${context.structure}]`);
-    contextParts.push(`[Filtros activos: ${context.activeFilters}]`);
+    contextParts.push(`[Structure: ${context.structure}]`);
+    contextParts.push(`[Active filters: ${context.activeFilters}]`);
     if (context.selectedNode) {
-      contextParts.push(`[Nodo seleccionado: ${context.selectedNode}]`);
+      contextParts.push(`[Selected node: ${context.selectedNode}]`);
     }
-    
-    const contextPrompt = 'Contexto de DagCity: ' + contextParts.join(' ');
+
+    const contextPrompt = 'DagCity context: ' + contextParts.join(' ');
 
     const messages = [
       { role: 'system', content: DAGCITY_SYSTEM_PROMPT },
