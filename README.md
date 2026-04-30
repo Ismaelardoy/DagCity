@@ -17,7 +17,7 @@
 <!-- SCREENSHOT 1: Full city overview — aerial view of the 3D city with multiple islands, glowing neon buildings and inter-island arcs. Capture this from a high orbit angle showing the entire DAG City layout with all sectors visible. -->
 <img src="images/dagcity_overview.png" width="900" alt="DagCity — 3D Overview" style="border-radius:12px; border: 1px solid #ff00ff44; box-shadow: 0 0 40px #ff00ff22;"/>
 
-*A DAG of 200+ dbt models rendered as a neon-lit metropolis. Each building is a node. Each glowing arc is a dependency.*
+*A DAG of 900+ dbt models rendered as a neon-lit metropolis. Each building is a node. Each glowing arc is a dependency.*
 
 </div>
 
@@ -318,12 +318,11 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 | Key | Action |
 |---|---|
 | `G` | Global View — cinematic orbit of the entire city |
-| `M` | Global Tactical Map overlay |
+| `M` | Global Map overlay |
 | `V` | Cinema Mode — hide all UI for clean recording |
 | `Esc` | Deselect / close panels |
 | `⌘K` / `Ctrl+K` | Omni Search — find any node instantly |
 | `Click` node | Focus + lineage highlight |
-| `Double-click` node | Full upstream/downstream blast radius |
 
 ---
 
