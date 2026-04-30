@@ -317,12 +317,17 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 
 | Key | Action |
 |---|---|
+| `W` / `A` / `S` / `D` | Camera movement (forward / left / backward / right) |
+| `Space` | Camera elevation up |
+| `Shift` | Camera elevation down |
+| `Mouse Wheel` | Zoom in / out |
 | `G` | Global View — cinematic orbit of the entire city |
 | `M` | Global Map overlay |
 | `V` | Cinema Mode — hide all UI for clean recording |
 | `Esc` | Deselect / close panels |
 | `⌘K` / `Ctrl+K` | Omni Search — find any node instantly |
 | `Click` node | Focus + lineage highlight |
+| `Double-click` node | Full upstream/downstream blast radius |
 
 ---
 
