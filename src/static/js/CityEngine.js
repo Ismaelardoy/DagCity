@@ -3982,6 +3982,33 @@ export function rebuildCity(graphData, isLiveSync = false) {
 
   if (isLiveSync && meshes.length > 0 && nodes.length === meshes.length) {
     console.log('[📡] Smooth height transition...');
+    // Loop 1: Preserve coordinates and execution times from partial dbt runs
+    nodes.forEach(n => {
+      const m = nodeMeshMap[n.id];
+      if (m && m.userData.node) {
+        const oldNode = m.userData.node;
+        // Preserve positions
+        n.x = oldNode.x;
+        n.y = oldNode.y;
+        n.z = oldNode.z;
+        n._baseLayoutX = oldNode._baseLayoutX;
+        n._baseLayoutZ = oldNode._baseLayoutZ;
+        
+        // Preserve execution times if missing in this partial run
+        if (n.time_source === 'none' && oldNode.time_source === 'real') {
+          n.execution_time = oldNode.execution_time;
+          n.time_source = oldNode.time_source;
+          n.is_bottleneck = oldNode.is_bottleneck;
+        }
+      }
+    });
+
+    // Recalculate global metrics using the preserved times
+    hasReal = graphData.metadata?.has_real_times || nodes.some(n => n.time_source === 'real');
+    maxTime = nodes.length ? Math.max(...nodes.map(n => n.execution_time || 0)) : 0;
+    minTime = nodes.length ? Math.min(...nodes.map(n => n.execution_time || 0)) : 0;
+
+    // Loop 2: Update heights and labels with accurate global metrics
     nodes.forEach(n => {
       const m = nodeMeshMap[n.id];
       if (m) {
@@ -3997,9 +4024,7 @@ export function rebuildCity(graphData, isLiveSync = false) {
         }
       }
     });
-    maxTime = nodes.length ? Math.max(...nodes.map(n => n.execution_time || 0)) : 0;
-    minTime = nodes.length ? Math.min(...nodes.map(n => n.execution_time || 0)) : 0;
-    hasReal = graphData.metadata?.has_real_times || false;
+
     State.set('raw', graphData);
     State.emit('city:rebuilt', graphData);
     return;

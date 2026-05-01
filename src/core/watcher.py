@@ -18,7 +18,7 @@ class ManifestEventHandler(FileSystemEventHandler):
         self.debounce_seconds = 0.5
 
     def _process_manifest_event_path(self, event_path: str):
-        if not event_path or not event_path.endswith("manifest.json"):
+        if not event_path or not (event_path.endswith("manifest.json") or event_path.endswith("run_results.json")):
             return
 
         now = time.time()
@@ -28,13 +28,16 @@ class ManifestEventHandler(FileSystemEventHandler):
 
         # Check if it's the external manifest (Live Sync)
         is_external = False
+        run_results_path = self.manifest_path.replace("manifest.json", "run_results.json")
         try:
             if os.path.exists(self.manifest_path) and os.path.samefile(event_path, self.manifest_path):
+                is_external = True
+            elif os.path.exists(run_results_path) and os.path.samefile(event_path, run_results_path):
                 is_external = True
         except:
             pass
 
-        if is_external or event_path == self.manifest_path:
+        if is_external or event_path == self.manifest_path or event_path == run_results_path:
             project_name = "live"
         else:
             # Extract project name from path (assumes /data/projects/{name}/manifest.json)

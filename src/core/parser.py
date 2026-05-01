@@ -259,6 +259,23 @@ class ManifestParser:
 
     # ─── Core parsing engine (shared by parse() and parse_from_dict()) ─
     def _parse_data(self, data: Dict, run_times: Dict[str, float]) -> Dict[str, Any]:
+        # Fallback for embedded run_results (e.g. from user synthetic scripts)
+        # We merge this into run_times even if external file was loaded, in case
+        # the external file was incomplete or obsolete.
+        if "run_results" in data:
+            rr = data["run_results"]
+            if isinstance(rr, dict):
+                if "results" in rr and isinstance(rr["results"], list):
+                    for res in rr["results"]:
+                        uid = res.get("unique_id", "")
+                        t = res.get("execution_time", 0.0)
+                        if uid: run_times[uid] = float(t)
+                else:
+                    for uid, res in rr.items():
+                        if isinstance(res, dict):
+                            t = res.get("execution_time", 0.0)
+                            run_times[uid] = float(t)
+
         has_real_times = bool(run_times)
         nodes_data = {**data.get("nodes", {}), **data.get("sources", {})}
         parsed_nodes = {}
